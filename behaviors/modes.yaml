@@ -1,0 +1,13 @@
+bundle:
+  name: behavior-modes
+  version: 1.0.0
+  description: Generic mode system for runtime behavior modification
+
+# Hook module for context injection and tool moderation
+hooks:
+  - module: hooks-mode
+    source: modes:modules/hooks-mode
+    config:
+      # Additional search paths for mode definitions
+      # Bundle's own modes directory is added automatically
+      search_paths: []
