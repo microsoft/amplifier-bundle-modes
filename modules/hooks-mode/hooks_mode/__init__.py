@@ -283,7 +283,28 @@ def mount(coordinator: Any, config: dict) -> Any:
     # Create discovery with config paths
     discovery = ModeDiscovery()
 
-    # Add bundle search paths from config
+    # Auto-discover bundle's modes directory
+    # When installed as part of amplifier-bundle-modes, the structure is:
+    #   bundle-root/
+    #   ├── modes/           <- We want to find this
+    #   └── modules/
+    #       └── hooks-mode/
+    #           └── hooks_mode/
+    #               └── __init__.py  <- We are here
+    module_file = Path(__file__)  # .../hooks_mode/__init__.py
+    hooks_mode_package = module_file.parent  # .../hooks_mode/
+    hooks_mode_module = hooks_mode_package.parent  # .../hooks-mode/
+    modules_dir = hooks_mode_module.parent  # .../modules/
+    bundle_root = modules_dir.parent  # bundle root
+    bundle_modes_dir = bundle_root / "modes"
+    
+    if bundle_modes_dir.exists() and bundle_modes_dir.is_dir():
+        logger.info(f"Auto-discovered bundle modes directory: {bundle_modes_dir}")
+        discovery.add_search_path(bundle_modes_dir)
+    else:
+        logger.warning(f"Bundle modes directory not found at {bundle_modes_dir}")
+
+    # Add additional search paths from config
     extra_paths = config.get("search_paths", [])
     for path_str in extra_paths:
         discovery.add_search_path(Path(path_str))
