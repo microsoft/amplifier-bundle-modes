@@ -161,6 +161,23 @@ class ModeDiscovery:
 
         return sorted(modes.items())
 
+    def get_shortcuts(self) -> dict[str, str]:
+        """Get mapping of shortcut -> mode name for all modes with shortcuts."""
+        shortcuts: dict[str, str] = {}
+
+        for base_path in self._search_paths:
+            if not base_path.exists():
+                continue
+            for mode_file in base_path.glob("*.md"):
+                name = mode_file.stem
+                mode_def = self._cache.get(name) or parse_mode_file(mode_file)
+                if mode_def:
+                    self._cache[name] = mode_def
+                    if mode_def.shortcut and mode_def.shortcut not in shortcuts:
+                        shortcuts[mode_def.shortcut] = name
+
+        return shortcuts
+
     def clear_cache(self) -> None:
         """Clear the mode definition cache."""
         self._cache.clear()
