@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "amplifier-module-hooks-mode"
 version = "1.0.0"
 description = "Generic mode hooks for context injection and tool moderation"
-readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Microsoft", email = "amplifier@microsoft.com" }]
