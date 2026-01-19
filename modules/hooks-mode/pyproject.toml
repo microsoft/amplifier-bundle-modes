@@ -13,4 +13,4 @@ dependencies = ["pyyaml>=6.0"]
 dev = ["pytest", "pytest-asyncio"]
 
 [project.entry-points."amplifier.modules"]
-hooks-mode = "hooks_mode:mount"
+hooks-mode = "amplifier_module_hooks_mode:mount"
