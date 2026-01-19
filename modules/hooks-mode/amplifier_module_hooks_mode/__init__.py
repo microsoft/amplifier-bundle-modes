@@ -267,12 +267,16 @@ class ModeHooks:
         self.warned_tools.clear()
 
 
-def mount(coordinator: Any, config: dict) -> Any:
+async def mount(
+    coordinator: Any, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Mount the mode hooks module.
 
     Config options:
         search_paths: Additional paths to search for mode files
     """
+    config = config or {}
+
     # Initialize session state for modes
     if not hasattr(coordinator, "session_state"):
         coordinator.session_state = {}
@@ -289,15 +293,15 @@ def mount(coordinator: Any, config: dict) -> Any:
     #   ├── modes/           <- We want to find this
     #   └── modules/
     #       └── hooks-mode/
-    #           └── hooks_mode/
+    #           └── amplifier_module_hooks_mode/
     #               └── __init__.py  <- We are here
-    module_file = Path(__file__)  # .../hooks_mode/__init__.py
-    hooks_mode_package = module_file.parent  # .../hooks_mode/
+    module_file = Path(__file__)  # .../amplifier_module_hooks_mode/__init__.py
+    hooks_mode_package = module_file.parent  # .../amplifier_module_hooks_mode/
     hooks_mode_module = hooks_mode_package.parent  # .../hooks-mode/
     modules_dir = hooks_mode_module.parent  # .../modules/
     bundle_root = modules_dir.parent  # bundle root
     bundle_modes_dir = bundle_root / "modes"
-    
+
     if bundle_modes_dir.exists() and bundle_modes_dir.is_dir():
         logger.info(f"Auto-discovered bundle modes directory: {bundle_modes_dir}")
         discovery.add_search_path(bundle_modes_dir)
@@ -319,25 +323,25 @@ def mount(coordinator: Any, config: dict) -> Any:
     coordinator.session_state["mode_hooks"] = hooks
 
     # Register hooks
-    unregister_prompt = coordinator.hooks.register(
+    coordinator.hooks.register(
         "prompt:submit",
         hooks.handle_prompt_submit,
         priority=10,
         name="mode-context",
     )
 
-    unregister_tool = coordinator.hooks.register(
+    coordinator.hooks.register(
         "tool:pre",
         hooks.handle_tool_pre,
         priority=5,
         name="mode-tools",
     )
 
-    def cleanup():
-        unregister_prompt()
-        unregister_tool()
-
-    return cleanup
+    return {
+        "name": "hooks-mode",
+        "version": "1.0.0",
+        "description": "Generic mode hooks for context injection and tool moderation",
+    }
 
 
 # Exports for external use
