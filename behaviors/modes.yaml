@@ -6,7 +6,7 @@ bundle:
 # Hook module for context injection and tool moderation
 hooks:
   - module: hooks-mode
-    source: modes:modules/hooks-mode
+    source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/hooks-mode
     config:
       # Additional search paths for mode definitions
       # Bundle's own modes directory is added automatically
