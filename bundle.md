@@ -5,7 +5,6 @@ bundle:
   description: Generic mode system for runtime behavior modification
 
 includes:
-  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   - bundle: modes:behaviors/modes
 ---
 
@@ -48,7 +47,3 @@ mode:
 
 MODE CONTEXT: Instructions injected when mode is active...
 ```
-
----
-
-@foundation:context/shared/common-system-base.md
