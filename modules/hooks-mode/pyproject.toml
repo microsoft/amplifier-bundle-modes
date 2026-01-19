@@ -3,10 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "hooks-mode"
+name = "amplifier-module-hooks-mode"
 version = "1.0.0"
 description = "Generic mode hooks for context injection and tool moderation"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Microsoft", email = "amplifier@microsoft.com" }]
 dependencies = ["pyyaml>=6.0"]
 
 [project.optional-dependencies]
@@ -14,3 +17,6 @@ dev = ["pytest", "pytest-asyncio"]
 
 [project.entry-points."amplifier.modules"]
 hooks-mode = "amplifier_module_hooks_mode:mount"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_hooks_mode"]
