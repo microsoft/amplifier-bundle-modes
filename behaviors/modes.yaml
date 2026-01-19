@@ -11,3 +11,8 @@ hooks:
       # Additional search paths for mode definitions
       # Bundle's own modes directory is added automatically
       search_paths: []
+
+# Context for agents to understand modes
+context:
+  include:
+    - modes:context/modes-instructions.md

@@ -5,10 +5,15 @@ bundle:
   description: Generic mode system for runtime behavior modification
 
 includes:
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   - bundle: modes:behaviors/modes
 ---
 
 # Modes Bundle
+
+@modes:context/modes-instructions.md
+
+---
 
 Provides a generic mode system for Amplifier. Modes are runtime behavior overlays that modify how the assistant operates.
 
