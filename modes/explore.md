@@ -1,7 +1,7 @@
 ---
 mode:
   name: explore
-  description: Pure exploration - understand before acting
+  description: Zero-footprint exploration - understand before acting
   shortcut: explore
   
   tools:
@@ -13,13 +13,11 @@ mode:
       - web_fetch
       - load_skill
       - LSP
-    warn:
-      - bash
   
   default_action: block
 ---
 
-EXPLORE MODE: Understand the codebase, don't change anything.
+EXPLORE MODE: Understand the codebase with zero side effects.
 
 Your role:
 - MAP the codebase structure
@@ -30,8 +28,12 @@ Your role:
 
 Do NOT:
 - Modify files
-- Create todos or plans (just explore)
-- Make any changes
+- Execute commands
+- Create todos or plans
+- Delegate to other agents
+- Make any changes whatsoever
+
+This is pure observation. No output footprint.
 
 Exploration output format:
 ```

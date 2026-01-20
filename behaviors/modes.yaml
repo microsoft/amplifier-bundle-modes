@@ -3,14 +3,24 @@ bundle:
   version: 1.0.0
   description: Generic mode system for runtime behavior modification
 
-# Hook module for context injection and tool moderation
+# Hook modules for context injection, tool moderation, and approval
 hooks:
+  # Mode enforcement hook (runs after approval to set mode_confirm_tools)
   - module: hooks-mode
     source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/hooks-mode
     config:
       # Additional search paths for mode definitions
       # Bundle's own modes directory is added automatically
       search_paths: []
+
+  # Approval hook for confirm action (prompts user for approval)
+  - module: hooks-approval
+    source: git+https://github.com/microsoft/amplifier-module-hooks-approval
+    config:
+      # Mode-driven: approval decisions come from mode_confirm_tools in session state
+      # No static rules needed - the mode system handles which tools need confirmation
+      rules: []
+      default_action: continue
 
 # Context for agents to understand modes
 context:

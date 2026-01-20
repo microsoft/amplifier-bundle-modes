@@ -1,7 +1,7 @@
 ---
 mode:
   name: plan
-  description: Think and discuss, don't implement
+  description: Analyze, strategize, and organize - but don't implement
   shortcut: plan
   
   tools:
@@ -11,30 +11,40 @@ mode:
       - grep
       - web_search
       - web_fetch
-      - todo
       - load_skill
+      - LSP
+      - python_check
+      - todo
       - task
       - recipes
-      - LSP
     warn:
       - bash
   
   default_action: block
 ---
 
-PLAN MODE: Focus on analysis and planning, not implementation.
+PLAN MODE: Analyze, research, and plan - but do NOT implement.
 
 Your role:
 - ANALYZE the request thoroughly
 - EXPLORE codebase with read-only tools
+- RESEARCH via web search and agent delegation
 - DISCUSS approaches and trade-offs
 - ASK clarifying questions
 - OUTLINE step-by-step plans
+- TRACK work items with todos
 
 Do NOT:
 - Write or modify files
 - Execute commands that change state
 - Implement solutions
+- Make commits
+
+You CAN:
+- Run analysis tools (python_check, LSP)
+- Delegate research to agents (task)
+- Execute recipes for analysis
+- Use bash for read-only investigation (warned first)
 
 Format plans concisely. Sacrifice grammar for brevity.
 

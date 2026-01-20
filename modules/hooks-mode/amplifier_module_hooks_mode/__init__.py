@@ -36,6 +36,7 @@ class ModeDefinition:
     context: str = ""  # Markdown body - injected when mode active
     safe_tools: list[str] = field(default_factory=list)
     warn_tools: list[str] = field(default_factory=list)
+    confirm_tools: list[str] = field(default_factory=list)  # Require user approval
     block_tools: list[str] = field(default_factory=list)
     default_action: str = "block"  # "block" or "allow"
 
@@ -94,6 +95,7 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
         context=markdown_body,
         safe_tools=tools_config.get("safe", []),
         warn_tools=tools_config.get("warn", []),
+        confirm_tools=tools_config.get("confirm", []),
         block_tools=tools_config.get("block", []),
         default_action=mode_config.get("default_action", "block"),
     )
@@ -192,11 +194,28 @@ class ModeHooks:
         self.warned_tools: set[str] = set()
 
     def _get_active_mode(self) -> ModeDefinition | None:
-        """Get the currently active mode definition."""
+        """Get the currently active mode definition.
+
+        Updates session_state["require_approval_tools"] for approval hook integration.
+        This uses the generic key that approval hook respects, allowing modes to
+        drive approval policy without the approval hook knowing about modes.
+        """
         mode_name = self.coordinator.session_state.get("active_mode")
         if not mode_name:
+            # Clear approval requirements when no mode is active
+            self.coordinator.session_state["require_approval_tools"] = set()
             return None
-        return self.discovery.find(mode_name)
+
+        mode = self.discovery.find(mode_name)
+        if mode:
+            # Populate generic approval key - approval hook checks this
+            self.coordinator.session_state["require_approval_tools"] = set(
+                mode.confirm_tools
+            )
+        else:
+            self.coordinator.session_state["require_approval_tools"] = set()
+
+        return mode
 
     async def handle_prompt_submit(self, _event: str, _data: dict) -> "HookResult":
         """Inject mode context on prompt submission."""
@@ -238,6 +257,11 @@ class ModeHooks:
                 action="deny",
                 reason=f"Mode '{mode.name}': '{tool_name}' is blocked. {mode.description}",
             )
+
+        # Confirm tools: let approval hook handle it
+        # (mode_confirm_tools is already set in session state by _get_active_mode)
+        if tool_name in mode.confirm_tools:
+            return HookResult(action="continue")
 
         # Warn-first tools: warn once, then allow
         if tool_name in mode.warn_tools:
@@ -330,10 +354,13 @@ async def mount(
         name="mode-context",
     )
 
+    # Priority -20 ensures modes hook runs BEFORE approval hook (-10)
+    # This allows modes to set session_state["require_approval_tools"]
+    # before the approval hook checks it
     coordinator.hooks.register(
         "tool:pre",
         hooks.handle_tool_pre,
-        priority=5,
+        priority=-20,
         name="mode-tools",
     )
 
