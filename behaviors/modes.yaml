@@ -17,10 +17,12 @@ hooks:
   - module: hooks-approval
     source: git+https://github.com/microsoft/amplifier-module-hooks-approval
     config:
-      # Mode-driven: approval decisions come from mode_confirm_tools in session state
-      # No static rules needed - the mode system handles which tools need confirmation
+      # Mode-driven: approval decisions come from require_approval_tools in session state
+      # No static rules - the mode system fully controls which tools need confirmation
       rules: []
       default_action: continue
+      # Skip built-in high-risk checks - let modes drive all approval decisions
+      policy_driven_only: true
 
 # Context for agents to understand modes
 context:
