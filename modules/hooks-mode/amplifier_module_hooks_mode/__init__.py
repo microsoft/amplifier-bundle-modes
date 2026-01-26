@@ -102,7 +102,14 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
 
 
 class ModeDiscovery:
-    """Discover mode definitions from search paths."""
+    """Discover mode definitions from search paths.
+
+    Args:
+        search_paths: Explicit paths to search for mode files
+        working_dir: Project directory for `.amplifier/modes/` discovery.
+            Falls back to cwd. Important for server deployments where
+            process cwd differs from user's project directory.
+    """
 
     def __init__(
         self, search_paths: list[Path] | None = None, working_dir: Path | None = None
@@ -301,6 +308,11 @@ async def mount(
 
     Config options:
         search_paths: Additional paths to search for mode files
+
+    Note:
+        Retrieves 'session.working_dir' capability for project mode discovery,
+        falling back to cwd. This handles server deployments where the
+        process cwd differs from the user's project directory.
     """
     config = config or {}
 
