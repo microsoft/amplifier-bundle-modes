@@ -102,9 +102,19 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
 
 
 class ModeDiscovery:
-    """Discover mode definitions from search paths."""
+    """Discover mode definitions from search paths.
 
-    def __init__(self, search_paths: list[Path] | None = None):
+    Args:
+        search_paths: Explicit paths to search for mode files
+        working_dir: Project directory for `.amplifier/modes/` discovery.
+            Falls back to cwd. Important for server deployments where
+            process cwd differs from user's project directory.
+    """
+
+    def __init__(
+        self, search_paths: list[Path] | None = None, working_dir: Path | None = None
+    ):
+        self._working_dir = working_dir or Path.cwd()
         self._search_paths = search_paths or self._default_search_paths()
         self._cache: dict[str, ModeDefinition] = {}
 
@@ -112,8 +122,8 @@ class ModeDiscovery:
         """Get default search paths for mode discovery."""
         paths = []
 
-        # Project modes (highest precedence)
-        project_modes = Path.cwd() / ".amplifier" / "modes"
+        # Project modes (highest precedence) - use working_dir instead of cwd
+        project_modes = self._working_dir / ".amplifier" / "modes"
         if project_modes.exists():
             paths.append(project_modes)
 
@@ -298,6 +308,11 @@ async def mount(
 
     Config options:
         search_paths: Additional paths to search for mode files
+
+    Note:
+        Retrieves 'session.working_dir' capability for project mode discovery,
+        falling back to cwd. This handles server deployments where the
+        process cwd differs from the user's project directory.
     """
     config = config or {}
 
@@ -308,8 +323,12 @@ async def mount(
     if "active_mode" not in coordinator.session_state:
         coordinator.session_state["active_mode"] = None
 
+    # Get working_dir from capability (for server deployments where cwd is wrong)
+    working_dir_str = coordinator.get_capability("session.working_dir")
+    working_dir = Path(working_dir_str) if working_dir_str else None
+
     # Create discovery with config paths
-    discovery = ModeDiscovery()
+    discovery = ModeDiscovery(working_dir=working_dir)
 
     # Auto-discover bundle's modes directory
     # When installed as part of amplifier-bundle-modes, the structure is:

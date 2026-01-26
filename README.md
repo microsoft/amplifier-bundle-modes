@@ -92,9 +92,11 @@ Do NOT make changes without explicit approval.
 
 Modes are discovered from (highest precedence first):
 
-1. `.amplifier/modes/` - Project-specific modes
+1. `<project>/.amplifier/modes/` - Project-specific modes
 2. `~/.amplifier/modes/` - User-defined modes
 3. Bundle `modes/` directory - Built-in modes
+
+> **Note**: In server/web deployments, "project" is determined by the `session.working_dir` capability, not the server process cwd. This enables correct mode discovery when Amplifier runs as a backend service.
 
 ### Mode Configuration
 
