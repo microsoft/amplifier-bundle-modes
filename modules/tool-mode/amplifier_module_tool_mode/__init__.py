@@ -8,10 +8,7 @@ and actually setting session_state["active_mode"] for enforcement.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    pass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -178,8 +175,13 @@ async def mount(
     """Mount the mode tool module."""
     tool = ModeTool(coordinator)
 
-    # Register the tool
-    coordinator.register_tool(tool)
+    # Register the tool using mount_points (standard pattern for tool modules)
+    if not hasattr(coordinator, "mount_points"):
+        coordinator.mount_points = {}
+    if "tools" not in coordinator.mount_points:
+        coordinator.mount_points["tools"] = {}
+
+    coordinator.mount_points["tools"][tool.name] = tool
 
     return {
         "name": "tool-mode",
