@@ -301,6 +301,89 @@ class ModeHooks:
         self.warned_tools.clear()
 
 
+def _get_loaded_bundle_paths(coordinator: Any) -> list[Path]:
+    """Get paths to all loaded bundles.
+
+    Checks multiple sources for bundle information:
+    1. coordinator.get_capability("bundle.paths") - list of bundle root paths
+    2. coordinator.config.get("bundle_paths") - config-based paths
+    3. coordinator.session_state.get("loaded_bundles") - runtime-loaded bundles
+    4. ~/.amplifier/cache/ - scan for cached bundles with modes/ directories
+
+    Returns:
+        List of Path objects to bundle root directories.
+    """
+    paths: list[Path] = []
+
+    # Try capability first (preferred method)
+    try:
+        bundle_paths = coordinator.get_capability("bundle.paths")
+        if bundle_paths:
+            if isinstance(bundle_paths, list):
+                paths.extend(Path(p) for p in bundle_paths if p)
+            elif isinstance(bundle_paths, str):
+                paths.append(Path(bundle_paths))
+    except Exception:
+        pass
+
+    # Try config
+    try:
+        config_paths = coordinator.config.get("bundle_paths", [])
+        if config_paths:
+            paths.extend(Path(p) for p in config_paths if p)
+    except Exception:
+        pass
+
+    # Try session state (for dynamically loaded bundles)
+    try:
+        if hasattr(coordinator, "session_state"):
+            loaded = coordinator.session_state.get("loaded_bundles", {})
+            if isinstance(loaded, dict):
+                # loaded_bundles might be {name: path} or {name: {path: ..., ...}}
+                for value in loaded.values():
+                    if isinstance(value, str):
+                        paths.append(Path(value))
+                    elif isinstance(value, dict) and "path" in value:
+                        paths.append(Path(value["path"]))
+            elif isinstance(loaded, list):
+                paths.extend(Path(p) for p in loaded if p)
+    except Exception:
+        pass
+
+    # Read bundle paths from settings.yaml (where `amplifier bundle add` stores them)
+    settings_file = Path.home() / ".amplifier" / "settings.yaml"
+    if settings_file.exists():
+        try:
+            settings = yaml.safe_load(settings_file.read_text(encoding="utf-8")) or {}
+            bundle_config = settings.get("bundle", {})
+            added_bundles = bundle_config.get("added", {})
+            for bundle_path in added_bundles.values():
+                if bundle_path and isinstance(bundle_path, str):
+                    paths.append(Path(bundle_path))
+        except Exception as e:
+            logger.debug(f"Failed to read bundle paths from settings.yaml: {e}")
+
+    # Scan bundle cache directory for bundles with modes/ directories
+    # This catches bundles that were installed but not explicitly tracked
+    cache_dir = Path.home() / ".amplifier" / "cache"
+    if cache_dir.exists():
+        for entry in cache_dir.iterdir():
+            if entry.is_dir() and entry.name.startswith("amplifier-bundle-"):
+                modes_dir = entry / "modes"
+                if modes_dir.exists() and modes_dir.is_dir():
+                    paths.append(entry)
+
+    # Deduplicate while preserving order
+    seen: set[Path] = set()
+    unique_paths: list[Path] = []
+    for p in paths:
+        if p not in seen and p.exists():
+            seen.add(p)
+            unique_paths.append(p)
+
+    return unique_paths
+
+
 async def mount(
     coordinator: Any, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -330,7 +413,7 @@ async def mount(
     # Create discovery with config paths
     discovery = ModeDiscovery(working_dir=working_dir)
 
-    # Auto-discover bundle's modes directory
+    # Auto-discover modes from this bundle (hooks-mode's own bundle)
     # When installed as part of amplifier-bundle-modes, the structure is:
     #   bundle-root/
     #   ├── modes/           <- We want to find this
@@ -348,8 +431,16 @@ async def mount(
     if bundle_modes_dir.exists() and bundle_modes_dir.is_dir():
         logger.info(f"Auto-discovered bundle modes directory: {bundle_modes_dir}")
         discovery.add_search_path(bundle_modes_dir)
-    else:
-        logger.warning(f"Bundle modes directory not found at {bundle_modes_dir}")
+
+    # Cross-bundle mode discovery: find modes/ directories in all loaded bundles
+    # Try to get bundle paths from coordinator capabilities or config
+    bundle_paths = _get_loaded_bundle_paths(coordinator)
+    for bundle_path in bundle_paths:
+        bundle_modes = bundle_path / "modes"
+        if bundle_modes.exists() and bundle_modes.is_dir():
+            if bundle_modes not in discovery._search_paths:
+                logger.info(f"Discovered modes from bundle: {bundle_modes}")
+                discovery.add_search_path(bundle_modes)
 
     # Add additional search paths from config
     extra_paths = config.get("search_paths", [])
@@ -382,6 +473,65 @@ async def mount(
         priority=-20,
         name="mode-tools",
     )
+
+    # Register capabilities for programmatic access to mode information
+    mode_search_paths = [str(p) for p in discovery._search_paths]
+    coordinator.register_capability("modes.search_paths", mode_search_paths)
+
+    # Create a list of all discovered modes for easy access
+    discovered_modes = []
+    for name, desc in discovery.list_modes():
+        discovered_modes.append({"name": name, "description": desc})
+    coordinator.register_capability("modes.discovered", discovered_modes)
+
+    # Inject permanent context listing all discovered modes and their locations
+    # This helps the AI know about modes from all loaded bundles
+    mode_list_lines = []
+    for search_path in discovery._search_paths:
+        if search_path.exists():
+            for mode_file in sorted(search_path.glob("*.md")):
+                mode_def = parse_mode_file(mode_file)
+                if mode_def:
+                    mode_list_lines.append(
+                        f"- **{mode_def.name}**: {mode_def.description} (from {search_path})"
+                    )
+
+    if mode_list_lines:
+        modes_context = (
+            """<system-reminder source="discovered-modes">
+## All Discovered Modes
+
+The following modes are available from all loaded bundles:
+
+"""
+            + "\n".join(mode_list_lines)
+            + """
+
+When the user runs /modes, list ALL of the above modes. These include modes from multiple bundles.
+</system-reminder>"""
+        )
+        coordinator.session_state["modes_discovery_context"] = modes_context
+
+        # Register a hook to inject this context on first prompt
+        async def inject_modes_list(_event: str, _data: dict) -> "HookResult":
+            from amplifier_core.models import HookResult
+
+            ctx = coordinator.session_state.pop("modes_discovery_context", None)
+            if ctx:
+                return HookResult(
+                    action="inject_context",
+                    context_injection=ctx,
+                    context_injection_role="system",
+                    ephemeral=False,
+                )
+            return HookResult(action="continue")
+
+        coordinator.hooks.register(
+            "prompt:submit",
+            inject_modes_list,
+            priority=5,  # Run before other hooks
+            name="modes-discovery-list",
+        )
 
     return {
         "name": "hooks-mode",
