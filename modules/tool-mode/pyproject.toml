@@ -1,0 +1,11 @@
+[project]
+name = "amplifier-module-tool-mode"
+version = "1.0.0"
+description = "Tool for activating and deactivating Amplifier modes"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

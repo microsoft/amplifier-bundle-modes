@@ -3,6 +3,11 @@ bundle:
   version: 1.0.0
   description: Generic mode system for runtime behavior modification
 
+# Tool for agents to activate/deactivate modes
+tools:
+  - module: tool-mode
+    source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/tool-mode
+
 # Hook modules for context injection, tool moderation, and approval
 hooks:
   # Mode enforcement hook (runs after approval to set mode_confirm_tools)

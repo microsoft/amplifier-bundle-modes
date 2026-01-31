@@ -10,6 +10,8 @@ Modes are runtime behavior overlays that modify how you operate without changing
 | `/modes` | List all available modes |
 | `/mode off` | Deactivate current mode |
 
+**Important:** When you see these commands, you MUST use the `mode` tool to actually activate/deactivate modes. Simply understanding the mode isn't enough - tool policies are only enforced when `mode(action="activate", mode="<name>")` is called.
+
 ## How Modes Work
 
 When a mode is active:
@@ -55,3 +57,13 @@ When you see `<system-reminder source="mode-<name>">` in your context:
 **Anti-pattern:** Ignoring mode guidance or trying to work around tool restrictions.
 
 **Correct pattern:** Adapt your approach to work within the mode's constraints. If the user needs capabilities the mode restricts, suggest they use `/mode off`.
+
+## Cross-Bundle Mode Discovery
+
+Modes can come from multiple sources:
+1. Built-in modes in the modes bundle (`@modes:modes/`)
+2. Modes from other loaded bundles (check `~/.amplifier/settings.yaml` for `bundle.added` paths, then look in their `modes/` directories)
+3. Custom project modes (`.amplifier/modes/`)
+4. Custom user modes (`~/.amplifier/modes/`)
+
+**When listing modes with `/modes`:** Check ALL these locations to find all available modes. Read the settings.yaml to discover which bundles are loaded, then check each bundle's `modes/` directory for additional mode files.
