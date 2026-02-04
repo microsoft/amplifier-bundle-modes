@@ -15,7 +15,7 @@ mode:
       - LSP
       - python_check
       - todo
-      - task
+      - delegate
       - recipes
     warn:
       - bash
@@ -42,7 +42,7 @@ Do NOT:
 
 You CAN:
 - Run analysis tools (python_check, LSP)
-- Delegate research to agents (task)
+- Delegate research to agents (delegate)
 - Execute recipes for analysis
 - Use bash for read-only investigation (warned first)
 

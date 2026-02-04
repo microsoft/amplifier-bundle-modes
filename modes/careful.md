@@ -15,7 +15,7 @@ mode:
       - LSP
       - python_check
       - todo
-      - task
+      - delegate
       - recipes
     confirm:
       - write_file
