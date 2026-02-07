@@ -109,14 +109,22 @@ class ModeDiscovery:
         working_dir: Project directory for `.amplifier/modes/` discovery.
             Falls back to cwd. Important for server deployments where
             process cwd differs from user's project directory.
+        coordinator: Optional coordinator reference for lazy bundle discovery.
+            When provided, modes directories from all composed bundles are
+            auto-discovered on first access via the mention_resolver capability.
     """
 
     def __init__(
-        self, search_paths: list[Path] | None = None, working_dir: Path | None = None
+        self,
+        search_paths: list[Path] | None = None,
+        working_dir: Path | None = None,
+        coordinator: Any = None,
     ):
         self._working_dir = working_dir or Path.cwd()
         self._search_paths = search_paths or self._default_search_paths()
         self._cache: dict[str, ModeDefinition] = {}
+        self._coordinator = coordinator
+        self._bundle_discovery_done = False
 
     def _default_search_paths(self) -> list[Path]:
         """Get default search paths for mode discovery."""
@@ -139,8 +147,35 @@ class ModeDiscovery:
         if path.exists() and path not in self._search_paths:
             self._search_paths.append(path)
 
+    def _ensure_bundle_discovery(self) -> None:
+        """Lazily discover modes directories from all composed bundles.
+
+        Deferred to first access because the mention_resolver capability
+        is registered after all modules mount. By the time a user invokes
+        /modes or activates a mode, all capabilities are available.
+        """
+        if self._bundle_discovery_done or self._coordinator is None:
+            return
+        self._bundle_discovery_done = True
+
+        resolver = self._coordinator.get_capability("mention_resolver")
+        if not resolver or not hasattr(resolver, "bundles"):
+            return
+
+        for namespace, bundle in resolver.bundles.items():
+            if hasattr(bundle, "base_path") and bundle.base_path:
+                bundle_modes = Path(bundle.base_path) / "modes"
+                if bundle_modes.exists() and bundle_modes.is_dir():
+                    logger.info(
+                        "Auto-discovered modes from bundle"
+                        f" '{namespace}': {bundle_modes}"
+                    )
+                    self.add_search_path(bundle_modes)
+
     def find(self, name: str) -> ModeDefinition | None:
         """Find a mode definition by name."""
+        self._ensure_bundle_discovery()
+
         # Check cache first
         if name in self._cache:
             return self._cache[name]
@@ -158,6 +193,7 @@ class ModeDiscovery:
 
     def list_modes(self) -> list[tuple[str, str]]:
         """List all available modes as (name, description) tuples."""
+        self._ensure_bundle_discovery()
         modes: dict[str, str] = {}
 
         for base_path in self._search_paths:
@@ -175,6 +211,7 @@ class ModeDiscovery:
 
     def get_shortcuts(self) -> dict[str, str]:
         """Get mapping of shortcut -> mode name for all modes with shortcuts."""
+        self._ensure_bundle_discovery()
         shortcuts: dict[str, str] = {}
 
         for base_path in self._search_paths:
@@ -327,8 +364,8 @@ async def mount(
     working_dir_str = coordinator.get_capability("session.working_dir")
     working_dir = Path(working_dir_str) if working_dir_str else None
 
-    # Create discovery with config paths
-    discovery = ModeDiscovery(working_dir=working_dir)
+    # Create discovery with config paths and coordinator for lazy bundle discovery
+    discovery = ModeDiscovery(working_dir=working_dir, coordinator=coordinator)
 
     # Auto-discover bundle's modes directory
     # When installed as part of amplifier-bundle-modes, the structure is:
@@ -354,7 +391,7 @@ async def mount(
     # Add additional search paths from config
     extra_paths = config.get("search_paths", [])
     for path_str in extra_paths:
-        discovery.add_search_path(Path(path_str))
+        discovery.add_search_path(Path(path_str).expanduser().resolve())
 
     # Store discovery in session state for app access
     coordinator.session_state["mode_discovery"] = discovery
