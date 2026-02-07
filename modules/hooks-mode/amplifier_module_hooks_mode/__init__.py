@@ -155,22 +155,59 @@ class ModeDiscovery:
         /modes or activates a mode, all capabilities are available.
         """
         if self._bundle_discovery_done or self._coordinator is None:
+            logger.debug(
+                "Bundle discovery skipped: done=%s, coordinator=%s",
+                self._bundle_discovery_done,
+                self._coordinator is not None,
+            )
             return
         self._bundle_discovery_done = True
 
         resolver = self._coordinator.get_capability("mention_resolver")
-        if not resolver or not hasattr(resolver, "bundles"):
+        if not resolver:
+            logger.warning("Bundle mode discovery: no mention_resolver capability")
             return
 
-        for namespace, bundle in resolver.bundles.items():
+        # The mention_resolver may be a BaseMentionResolver (has .bundles directly)
+        # or an AppMentionResolver (wraps BaseMentionResolver as .foundation_resolver).
+        # Reach through to whichever has the bundles dict.
+        bundles = getattr(resolver, "bundles", None)
+        if bundles is None:
+            inner = getattr(resolver, "foundation_resolver", None)
+            if inner:
+                bundles = getattr(inner, "bundles", None)
+
+        if not bundles:
+            logger.warning(
+                "Bundle mode discovery: no bundles dict found on resolver"
+                " (type=%s, has_foundation=%s)",
+                type(resolver).__name__,
+                hasattr(resolver, "foundation_resolver"),
+            )
+            return
+
+        logger.info(
+            "Bundle mode discovery: scanning %d namespaces: %s",
+            len(bundles),
+            list(bundles.keys()),
+        )
+        for namespace, bundle in bundles.items():
             if hasattr(bundle, "base_path") and bundle.base_path:
                 bundle_modes = Path(bundle.base_path) / "modes"
                 if bundle_modes.exists() and bundle_modes.is_dir():
+                    mode_files = [f.stem for f in bundle_modes.glob("*.md")]
                     logger.info(
-                        "Auto-discovered modes from bundle"
-                        f" '{namespace}': {bundle_modes}"
+                        "Auto-discovered modes from bundle '%s': %s (files: %s)",
+                        namespace,
+                        bundle_modes,
+                        mode_files,
                     )
                     self.add_search_path(bundle_modes)
+
+        logger.info(
+            "Bundle mode discovery complete. Search paths: %s",
+            self._search_paths,
+        )
 
     def find(self, name: str) -> ModeDefinition | None:
         """Find a mode definition by name."""
