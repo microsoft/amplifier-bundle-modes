@@ -94,9 +94,34 @@ Modes are discovered from (highest precedence first):
 
 1. `<project>/.amplifier/modes/` - Project-specific modes
 2. `~/.amplifier/modes/` - User-defined modes
-3. Bundle `modes/` directory - Built-in modes
+3. Bundle `modes/` directory - Built-in modes from this bundle
+4. Config `search_paths` entries - Explicit additional paths
+5. Composed bundle `modes/` directories - Auto-discovered from all bundles in the session
 
 > **Note**: In server/web deployments, "project" is determined by the `session.working_dir` capability, not the server process cwd. This enables correct mode discovery when Amplifier runs as a backend service.
+
+### Third-Party Bundle Modes
+
+Any bundle that includes `hooks-mode` can contribute custom modes by placing `.md` files in a `modes/` directory at the bundle root. These are auto-discovered at runtime — no special configuration needed beyond the directory convention.
+
+Example bundle structure:
+```
+my-bundle/
+├── bundle.md
+├── modes/
+│   ├── my-custom-mode.md    # Automatically discovered
+│   └── another-mode.md
+└── ...
+```
+
+The bundle's `bundle.md` just needs to include `hooks-mode`:
+```yaml
+hooks:
+  - module: hooks-mode
+    source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/hooks-mode
+```
+
+All modes from all composed bundles appear in `/modes` and are activatable via `/mode <name>` or shortcuts.
 
 ### Mode Configuration
 
