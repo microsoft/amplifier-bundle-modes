@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amplifier-module-tool-mode"
+version = "1.0.0"
+description = "Mode management tool for agent-initiated mode transitions"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Microsoft" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.entry-points."amplifier.modules"]
+tool-mode = "amplifier_module_tool_mode:mount"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_tool_mode"]
