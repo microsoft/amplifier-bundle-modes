@@ -11,6 +11,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+__amplifier_module_type__ = "tool"
+
 
 class ToolResult:
     """Minimal ToolResult for when amplifier_core is not available."""
