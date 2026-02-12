@@ -55,3 +55,16 @@ When you see `<system-reminder source="mode-<name>">` in your context:
 **Anti-pattern:** Ignoring mode guidance or trying to work around tool restrictions.
 
 **Correct pattern:** Adapt your approach to work within the mode's constraints. If the user needs capabilities the mode restricts, suggest they use `/mode off`.
+
+## Mode Tool (Agent-Initiated Transitions)
+
+When the `mode` tool is available, agents can request mode changes programmatically:
+
+| Operation | Description |
+|-----------|-------------|
+| `mode(operation="list")` | List available modes |
+| `mode(operation="current")` | Check active mode |
+| `mode(operation="set", name="plan")` | Request mode activation |
+| `mode(operation="clear")` | Deactivate current mode |
+
+The default gate policy is `warn` — the first request is blocked with a reminder. Call again to confirm the transition. This prevents accidental mode changes while still allowing agent-driven workflows.

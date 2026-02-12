@@ -24,6 +24,13 @@ hooks:
       # Skip built-in high-risk checks - let modes drive all approval decisions
       policy_driven_only: true
 
+# Tool module for agent-initiated mode transitions
+tools:
+  - module: tool-mode
+    source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/tool-mode
+    config:
+      gate_policy: "warn"
+
 # Context for agents to understand modes
 context:
   include:
