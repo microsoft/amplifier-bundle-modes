@@ -309,7 +309,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
 
     # Validate hooks-mode is mounted (or will be - check at first use)
     if "mode_discovery" not in getattr(coordinator, "session_state", {}):
-        logger.warning(
+        logger.debug(
             "tool-mode: hooks-mode doesn't appear to be mounted yet. "
             "mode_discovery not found in session_state. "
             "The mode tool will validate at first use."
