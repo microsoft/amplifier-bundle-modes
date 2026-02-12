@@ -6,7 +6,6 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from amplifier_module_hooks_mode import ModeDiscovery
 
@@ -19,7 +18,7 @@ def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
             ---
             mode:
               name: {name}
-              description: "{description or name + ' mode'}"
+              description: "{description or name + " mode"}"
               tools:
                 safe: [read_file]
               default_action: block
@@ -35,6 +34,7 @@ def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
 # ---------------------------------------------------------------------------
 # Fix 1: source_base_paths support
 # ---------------------------------------------------------------------------
+
 
 class TestSourceBasePaths:
     """A1 fix: check source_base_paths on bundles."""
@@ -85,7 +85,7 @@ class TestSourceBasePaths:
 
         discovery = ModeDiscovery(search_paths=[], coordinator=coordinator)
         modes = discovery.list_modes()
-        names = [n for n, _ in modes]
+        names = [n for n, _desc, _source in modes]
         assert "from-a" in names
         assert "from-b" in names
 
@@ -93,6 +93,7 @@ class TestSourceBasePaths:
 # ---------------------------------------------------------------------------
 # Fix 3: @mention path deferred resolution
 # ---------------------------------------------------------------------------
+
 
 class TestMentionPathResolution:
     """A1 fix: @mention paths in search_paths config."""
@@ -160,6 +161,7 @@ class TestMentionPathResolution:
 # ---------------------------------------------------------------------------
 # Fix 2: relative path resolution against working_dir
 # ---------------------------------------------------------------------------
+
 
 class TestRelativePathResolution:
     """A1 fix: relative paths in search_paths resolve against working_dir."""

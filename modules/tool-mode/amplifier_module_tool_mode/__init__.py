@@ -139,8 +139,8 @@ class ModeTool:
             output={
                 "active_mode": active,
                 "modes": [
-                    {"name": name, "description": desc}
-                    for name, desc in modes_list
+                    {"name": name, "description": desc, "source": source}
+                    for name, desc, source in modes_list
                 ],
             },
         )
@@ -201,7 +201,7 @@ class ModeTool:
                 error={
                     "code": "mode_not_found",
                     "message": f"Mode '{name}' not found.",
-                    "available_modes": [n for n, _ in available],
+                    "available_modes": [n for n, _d, _s in available],
                 },
             )
 

@@ -32,6 +32,7 @@ class ModeDefinition:
 
     name: str
     description: str = ""
+    source: str = ""
     shortcut: str | None = None
     context: str = ""  # Markdown body - injected when mode active
     safe_tools: list[str] = field(default_factory=list)
@@ -116,38 +117,48 @@ class ModeDiscovery:
 
     def __init__(
         self,
-        search_paths: list[Path] | None = None,
+        search_paths: list[Path] | list[tuple[Path, str]] | None = None,
         working_dir: Path | None = None,
         coordinator: Any = None,
         deferred_paths: list[str] | None = None,
     ):
         self._working_dir = working_dir or Path.cwd()
-        self._search_paths = search_paths or self._default_search_paths()
+        # Normalize search_paths: accept bare Paths (legacy) or (Path, source) tuples
+        if search_paths is not None:
+            normalized: list[tuple[Path, str]] = []
+            for entry in search_paths:
+                if isinstance(entry, tuple):
+                    normalized.append(entry)
+                else:
+                    normalized.append((entry, ""))
+            self._search_paths = normalized
+        else:
+            self._search_paths = self._default_search_paths()
         self._cache: dict[str, ModeDefinition] = {}
         self._coordinator = coordinator
         self._bundle_discovery_done = False
         self._deferred_paths = deferred_paths or []
 
-    def _default_search_paths(self) -> list[Path]:
+    def _default_search_paths(self) -> list[tuple[Path, str]]:
         """Get default search paths for mode discovery."""
-        paths = []
+        paths: list[tuple[Path, str]] = []
 
         # Project modes (highest precedence) - use working_dir instead of cwd
         project_modes = self._working_dir / ".amplifier" / "modes"
         if project_modes.exists():
-            paths.append(project_modes)
+            paths.append((project_modes, "project"))
 
         # User modes
         user_modes = Path.home() / ".amplifier" / "modes"
         if user_modes.exists():
-            paths.append(user_modes)
+            paths.append((user_modes, "user"))
 
         return paths
 
-    def add_search_path(self, path: Path) -> None:
+    def add_search_path(self, path: Path, source: str = "") -> None:
         """Add a search path (e.g., from bundle)."""
-        if path.exists() and path not in self._search_paths:
-            self._search_paths.append(path)
+        if path.exists() and path not in [p for p, _s in self._search_paths]:
+            self._search_paths.append((path, source))
 
     def _ensure_bundle_discovery(self) -> None:
         """Lazily discover modes directories from all composed bundles.
@@ -219,7 +230,7 @@ class ModeDiscovery:
                         bundle_modes,
                         mode_files,
                     )
-                    self.add_search_path(bundle_modes)
+                    self.add_search_path(bundle_modes, source=namespace)
 
         # Resolve deferred @mention paths
         if self._deferred_paths:
@@ -269,7 +280,7 @@ class ModeDiscovery:
                     logger.info(
                         "Resolved deferred path '%s' -> %s", mention_path, resolved
                     )
-                    self.add_search_path(resolved)
+                    self.add_search_path(resolved, source=namespace)
                 else:
                     logger.warning(
                         "Resolved deferred path '%s' -> %s (does not exist)",
@@ -292,22 +303,23 @@ class ModeDiscovery:
             return self._cache[name]
 
         # Search paths
-        for base_path in self._search_paths:
+        for base_path, source_label in self._search_paths:
             mode_file = base_path / f"{name}.md"
             if mode_file.exists():
                 mode_def = parse_mode_file(mode_file)
                 if mode_def:
+                    mode_def.source = source_label
                     self._cache[name] = mode_def
                     return mode_def
 
         return None
 
-    def list_modes(self) -> list[tuple[str, str]]:
-        """List all available modes as (name, description) tuples."""
+    def list_modes(self) -> list[tuple[str, str, str]]:
+        """List all available modes as (name, description, source) tuples."""
         self._ensure_bundle_discovery()
-        modes: dict[str, str] = {}
+        modes: dict[str, tuple[str, str]] = {}
 
-        for base_path in self._search_paths:
+        for base_path, source_label in self._search_paths:
             if not base_path.exists():
                 continue
             for mode_file in base_path.glob("*.md"):
@@ -315,17 +327,18 @@ class ModeDiscovery:
                 if name not in modes:  # First match wins (precedence)
                     mode_def = parse_mode_file(mode_file)
                     if mode_def:
-                        modes[name] = mode_def.description
+                        mode_def.source = source_label
+                        modes[name] = (mode_def.description, source_label)
                         self._cache[name] = mode_def
 
-        return sorted(modes.items())
+        return sorted((name, desc, source) for name, (desc, source) in modes.items())
 
     def get_shortcuts(self) -> dict[str, str]:
         """Get mapping of shortcut -> mode name for all modes with shortcuts."""
         self._ensure_bundle_discovery()
         shortcuts: dict[str, str] = {}
 
-        for base_path in self._search_paths:
+        for base_path, _source_label in self._search_paths:
             if not base_path.exists():
                 continue
             for mode_file in base_path.glob("*.md"):
@@ -514,13 +527,13 @@ async def mount(
 
     if bundle_modes_dir.exists() and bundle_modes_dir.is_dir():
         logger.info(f"Auto-discovered bundle modes directory: {bundle_modes_dir}")
-        discovery.add_search_path(bundle_modes_dir)
+        discovery.add_search_path(bundle_modes_dir, source="modes")
     else:
         logger.warning(f"Bundle modes directory not found at {bundle_modes_dir}")
 
     # Add immediate (non-@mention) search paths
     for p in immediate_paths:
-        discovery.add_search_path(p)
+        discovery.add_search_path(p, source="config")
 
     # Store discovery in session state for app access
     coordinator.session_state["mode_discovery"] = discovery

@@ -6,7 +6,6 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from amplifier_module_hooks_mode import ModeDiscovery, parse_mode_file
 
@@ -19,7 +18,7 @@ def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
             ---
             mode:
               name: {name}
-              description: "{description or name + ' mode'}"
+              description: "{description or name + " mode"}"
               tools:
                 safe: [read_file, grep]
               default_action: block
@@ -86,7 +85,7 @@ class TestModeDiscovery:
 
         discovery = ModeDiscovery(search_paths=[modes_dir])
         modes = discovery.list_modes()
-        names = [name for name, _ in modes]
+        names = [name for name, _desc, _source in modes]
         assert "plan" in names
         assert "review" in names
 
@@ -140,9 +139,7 @@ class TestModeDiscovery:
 class TestBundleDiscovery:
     """Tests for _ensure_bundle_discovery (lazy bundle scanning)."""
 
-    def _make_coordinator_with_bundles(
-        self, bundle_map: dict[str, Path]
-    ) -> MagicMock:
+    def _make_coordinator_with_bundles(self, bundle_map: dict[str, Path]) -> MagicMock:
         """Create a mock coordinator with bundles on the resolver."""
         bundles = {}
         for namespace, base_path in bundle_map.items():
@@ -180,14 +177,16 @@ class TestBundleDiscovery:
         _create_mode_file(bundle_a / "modes", "alpha", "Alpha mode")
         _create_mode_file(bundle_b / "modes", "beta", "Beta mode")
 
-        coordinator = self._make_coordinator_with_bundles({
-            "a": bundle_a,
-            "b": bundle_b,
-        })
+        coordinator = self._make_coordinator_with_bundles(
+            {
+                "a": bundle_a,
+                "b": bundle_b,
+            }
+        )
         discovery = ModeDiscovery(search_paths=[], coordinator=coordinator)
 
         modes = discovery.list_modes()
-        names = [n for n, _ in modes]
+        names = [n for n, _desc, _source in modes]
         assert "alpha" in names
         assert "beta" in names
 
@@ -230,7 +229,9 @@ class TestBundleDiscovery:
 
         coordinator = MagicMock()
         coordinator.get_capability = MagicMock(
-            side_effect=lambda key: outer_resolver if key == "mention_resolver" else None
+            side_effect=lambda key: (
+                outer_resolver if key == "mention_resolver" else None
+            )
         )
 
         discovery = ModeDiscovery(search_paths=[], coordinator=coordinator)
