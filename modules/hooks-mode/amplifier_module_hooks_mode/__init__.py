@@ -119,12 +119,14 @@ class ModeDiscovery:
         search_paths: list[Path] | None = None,
         working_dir: Path | None = None,
         coordinator: Any = None,
+        deferred_paths: list[str] | None = None,
     ):
         self._working_dir = working_dir or Path.cwd()
         self._search_paths = search_paths or self._default_search_paths()
         self._cache: dict[str, ModeDefinition] = {}
         self._coordinator = coordinator
         self._bundle_discovery_done = False
+        self._deferred_paths = deferred_paths or []
 
     def _default_search_paths(self) -> list[Path]:
         """Get default search paths for mode discovery."""
@@ -192,8 +194,23 @@ class ModeDiscovery:
             list(bundles.keys()),
         )
         for namespace, bundle in bundles.items():
+            # Collect all candidate base paths for this bundle
+            candidate_paths: list[Path] = []
+
             if hasattr(bundle, "base_path") and bundle.base_path:
-                bundle_modes = Path(bundle.base_path) / "modes"
+                candidate_paths.append(Path(bundle.base_path))
+
+            # Also check source_base_paths for multi-source bundles
+            for sbp in getattr(bundle, "source_base_paths", None) or []:
+                p = Path(sbp)
+                if p not in candidate_paths:
+                    candidate_paths.append(p)
+
+            logger.debug(
+                "Bundle '%s': candidate paths = %s", namespace, candidate_paths
+            )
+            for base in candidate_paths:
+                bundle_modes = base / "modes"
                 if bundle_modes.exists() and bundle_modes.is_dir():
                     mode_files = [f.stem for f in bundle_modes.glob("*.md")]
                     logger.info(
@@ -203,6 +220,63 @@ class ModeDiscovery:
                         mode_files,
                     )
                     self.add_search_path(bundle_modes)
+
+        # Resolve deferred @mention paths
+        if self._deferred_paths:
+            for mention_path in self._deferred_paths:
+                if not mention_path.startswith("@"):
+                    logger.warning(
+                        "Deferred path '%s' doesn't start with @, skipping",
+                        mention_path,
+                    )
+                    continue
+
+                # Parse @namespace:subpath
+                without_at = mention_path[1:]
+                if ":" in without_at:
+                    namespace, subpath = without_at.split(":", 1)
+                else:
+                    namespace = without_at
+                    subpath = ""
+
+                if not bundles:
+                    logger.warning(
+                        "Cannot resolve '%s': no bundles available", mention_path
+                    )
+                    continue
+
+                bundle = bundles.get(namespace)
+                if not bundle:
+                    logger.warning(
+                        "Cannot resolve '%s': namespace '%s' not found in %s",
+                        mention_path,
+                        namespace,
+                        list(bundles.keys()),
+                    )
+                    continue
+
+                base = getattr(bundle, "base_path", None)
+                if not base:
+                    logger.warning(
+                        "Cannot resolve '%s': bundle '%s' has no base_path",
+                        mention_path,
+                        namespace,
+                    )
+                    continue
+
+                resolved = Path(base) / subpath if subpath else Path(base)
+                if resolved.exists() and resolved.is_dir():
+                    logger.info(
+                        "Resolved deferred path '%s' -> %s", mention_path, resolved
+                    )
+                    self.add_search_path(resolved)
+                else:
+                    logger.warning(
+                        "Resolved deferred path '%s' -> %s (does not exist)",
+                        mention_path,
+                        resolved,
+                    )
+            self._deferred_paths = []  # Clear after resolution
 
         logger.info(
             "Bundle mode discovery complete. Search paths: %s",
@@ -401,8 +475,27 @@ async def mount(
     working_dir_str = coordinator.get_capability("session.working_dir")
     working_dir = Path(working_dir_str) if working_dir_str else None
 
-    # Create discovery with config paths and coordinator for lazy bundle discovery
-    discovery = ModeDiscovery(working_dir=working_dir, coordinator=coordinator)
+    # Separate @mention paths (deferred) from filesystem paths (immediate)
+    extra_paths = config.get("search_paths", [])
+    deferred_paths: list[str] = []
+    immediate_paths: list[Path] = []
+    for path_str in extra_paths:
+        if isinstance(path_str, str) and path_str.startswith("@"):
+            deferred_paths.append(path_str)
+        else:
+            p = Path(str(path_str)).expanduser()
+            if not p.is_absolute():
+                # Resolve relative paths against working_dir, not cwd
+                p = (working_dir or Path.cwd()) / p
+            p = p.resolve()
+            immediate_paths.append(p)
+
+    # Create discovery with coordinator for lazy bundle discovery
+    discovery = ModeDiscovery(
+        working_dir=working_dir,
+        coordinator=coordinator,
+        deferred_paths=deferred_paths,
+    )
 
     # Auto-discover bundle's modes directory
     # When installed as part of amplifier-bundle-modes, the structure is:
@@ -425,10 +518,9 @@ async def mount(
     else:
         logger.warning(f"Bundle modes directory not found at {bundle_modes_dir}")
 
-    # Add additional search paths from config
-    extra_paths = config.get("search_paths", [])
-    for path_str in extra_paths:
-        discovery.add_search_path(Path(path_str).expanduser().resolve())
+    # Add immediate (non-@mention) search paths
+    for p in immediate_paths:
+        discovery.add_search_path(p)
 
     # Store discovery in session state for app access
     coordinator.session_state["mode_discovery"] = discovery
