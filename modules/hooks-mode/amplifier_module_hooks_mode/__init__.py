@@ -359,10 +359,20 @@ class ModeDiscovery:
 class ModeHooks:
     """Generic mode enforcement via hooks."""
 
-    def __init__(self, coordinator: Any, discovery: ModeDiscovery):
+    def __init__(
+        self,
+        coordinator: Any,
+        discovery: ModeDiscovery,
+        infrastructure_tools: set[str] | None = None,
+    ):
         self.coordinator = coordinator
         self.discovery = discovery
         self.warned_tools: set[str] = set()
+        self.infrastructure_tools: set[str] = (
+            infrastructure_tools
+            if infrastructure_tools is not None
+            else {"mode", "todo"}
+        )
 
     def _get_active_mode(self) -> ModeDefinition | None:
         """Get the currently active mode definition.
@@ -417,6 +427,10 @@ class ModeHooks:
             return HookResult(action="continue")
 
         tool_name = data.get("tool_name", "")
+
+        # Infrastructure tools: always bypass the cascade
+        if tool_name in self.infrastructure_tools:
+            return HookResult(action="continue")
 
         # Safe tools: always allow
         if tool_name in mode.safe_tools:
@@ -538,8 +552,22 @@ async def mount(
     # Store discovery in session state for app access
     coordinator.session_state["mode_discovery"] = discovery
 
+    # Parse infrastructure_tools config
+    raw_infra = config.get("infrastructure_tools", None)
+    if raw_infra is not None:
+        if isinstance(raw_infra, list):
+            infrastructure_tools: set[str] = set(raw_infra)
+        else:
+            logger.warning(
+                "infrastructure_tools config must be a list, got %s; using default",
+                type(raw_infra).__name__,
+            )
+            infrastructure_tools = {"mode", "todo"}
+    else:
+        infrastructure_tools = {"mode", "todo"}
+
     # Create hooks instance
-    hooks = ModeHooks(coordinator, discovery)
+    hooks = ModeHooks(coordinator, discovery, infrastructure_tools=infrastructure_tools)
 
     # Store hooks in session state for mode switching (to reset warnings)
     coordinator.session_state["mode_hooks"] = hooks

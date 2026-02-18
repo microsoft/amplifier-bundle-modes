@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from amplifier_module_hooks_mode import ModeHooks
+from amplifier_module_hooks_mode import ModeDiscovery, ModeHooks
 
 
 def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
@@ -96,4 +96,100 @@ class TestHandlerMethodName:
         assert not hasattr(ModeHooks, "handle_prompt_submit"), (
             "ModeHooks must NOT have the old 'handle_prompt_submit' method -- "
             "it should be renamed to 'handle_provider_request'"
+        )
+
+
+class TestInfrastructureToolsBypass:
+    """Fix 2: Infrastructure tools must bypass the mode tool cascade."""
+
+    @pytest.mark.asyncio
+    async def test_mode_tool_allowed_by_default(self, tmp_path: Path) -> None:
+        """The 'mode' tool must be allowed even when default_action is 'block'
+        and 'mode' is not in safe_tools."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "strict")
+
+        coordinator = _make_coordinator(active_mode="strict")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_tool_pre("tool:pre", {"tool_name": "mode"})
+        assert result.action == "continue", (
+            f"'mode' tool must be allowed (infrastructure tool), "
+            f"but got action='{result.action}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_todo_tool_allowed_by_default(self, tmp_path: Path) -> None:
+        """The 'todo' tool must be allowed even when default_action is 'block'
+        and 'todo' is not in safe_tools."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "notodo")
+
+        coordinator = _make_coordinator(active_mode="notodo")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_tool_pre("tool:pre", {"tool_name": "todo"})
+        assert result.action == "continue", (
+            f"'todo' tool must be allowed (infrastructure tool), "
+            f"but got action='{result.action}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_infrastructure_tool_still_blocked(self, tmp_path: Path) -> None:
+        """Tools NOT in infrastructure_tools must still follow the cascade."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "strict")
+
+        coordinator = _make_coordinator(active_mode="strict")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_tool_pre("tool:pre", {"tool_name": "write_file"})
+        assert result.action == "deny", (
+            f"'write_file' must still be blocked by default_action, "
+            f"but got action='{result.action}'"
+        )
+
+
+class TestInfrastructureToolsConfig:
+    """Fix 2: infrastructure_tools must be configurable."""
+
+    @pytest.mark.asyncio
+    async def test_custom_infrastructure_tools(self, tmp_path: Path) -> None:
+        """When infrastructure_tools is set to a custom list, only those tools bypass."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "custom")
+
+        coordinator = _make_coordinator(active_mode="custom")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery, infrastructure_tools={"mode"})
+
+        # "mode" should still be allowed
+        result = await hooks.handle_tool_pre("tool:pre", {"tool_name": "mode"})
+        assert result.action == "continue"
+
+        # "todo" should now be blocked (not in custom list)
+        result = await hooks.handle_tool_pre("tool:pre", {"tool_name": "todo"})
+        assert result.action == "deny"
+
+    @pytest.mark.asyncio
+    async def test_empty_infrastructure_tools_blocks_mode(self, tmp_path: Path) -> None:
+        """When infrastructure_tools is empty, even the mode tool is blocked."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "locked")
+
+        coordinator = _make_coordinator(active_mode="locked")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery, infrastructure_tools=set())
+
+        result = await hooks.handle_tool_pre("tool:pre", {"tool_name": "mode"})
+        assert result.action == "deny", (
+            "With empty infrastructure_tools, 'mode' must be blocked"
         )
