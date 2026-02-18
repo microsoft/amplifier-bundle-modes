@@ -172,7 +172,7 @@ amplifier-bundle-modes/
 
 1. **Mode Discovery**: `ModeDiscovery` searches paths for `.md` files
 2. **Mode Loading**: `parse_mode_file()` extracts YAML config + markdown context
-3. **Context Injection**: `prompt:submit` hook injects mode's markdown as `<system-reminder>`
+3. **Context Injection**: `provider:request` hook injects mode's markdown as `<system-reminder>`
 4. **Tool Moderation**: `tool:pre` hook checks each tool against mode's policy
 5. **Approval Integration**: `confirm` tools are delegated to approval hook via `require_approval_tools`
 
