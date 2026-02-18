@@ -388,8 +388,8 @@ class ModeHooks:
 
         return mode
 
-    async def handle_prompt_submit(self, _event: str, _data: dict) -> "HookResult":
-        """Inject mode context on prompt submission."""
+    async def handle_provider_request(self, _event: str, _data: dict) -> "HookResult":
+        """Inject mode context on every provider request."""
         from amplifier_core.models import HookResult
 
         mode = self._get_active_mode()
@@ -546,8 +546,8 @@ async def mount(
 
     # Register hooks
     coordinator.hooks.register(
-        "prompt:submit",
-        hooks.handle_prompt_submit,
+        "provider:request",
+        hooks.handle_provider_request,
         priority=10,
         name="mode-context",
     )
