@@ -193,3 +193,73 @@ class TestInfrastructureToolsConfig:
         assert result.action == "deny", (
             "With empty infrastructure_tools, 'mode' must be blocked"
         )
+
+
+class TestModeActiveSignal:
+    """Fix 3: Context injection must include an explicit MODE ACTIVE banner."""
+
+    @pytest.mark.asyncio
+    async def test_context_has_mode_active_banner(self, tmp_path: Path) -> None:
+        """Injected context must start with 'MODE ACTIVE: {name}' inside the tags."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "plan", "Plan mode")
+
+        coordinator = _make_coordinator(active_mode="plan")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_provider_request("provider:request", {})
+
+        assert result.action == "inject_context"
+        content = result.context_injection
+        assert "MODE ACTIVE: plan" in content
+
+    @pytest.mark.asyncio
+    async def test_context_has_do_not_reactivate_warning(self, tmp_path: Path) -> None:
+        """Injected context must warn the agent not to re-activate the current mode."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "brainstorm", "Brainstorm mode")
+
+        coordinator = _make_coordinator(active_mode="brainstorm")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_provider_request("provider:request", {})
+        content = result.context_injection
+        assert "do NOT call" in content or "do not call" in content.lower()
+        assert "brainstorm" in content
+
+    @pytest.mark.asyncio
+    async def test_context_still_contains_mode_content(self, tmp_path: Path) -> None:
+        """The mode's markdown body must still be included after the banner."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "plan", "Plan mode")
+
+        coordinator = _make_coordinator(active_mode="plan")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_provider_request("provider:request", {})
+        content = result.context_injection
+        assert "You are in plan mode." in content
+
+    @pytest.mark.asyncio
+    async def test_context_wrapped_in_system_reminder_tags(
+        self, tmp_path: Path
+    ) -> None:
+        """Context must be wrapped in <system-reminder> tags with mode source."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "plan", "Plan mode")
+
+        coordinator = _make_coordinator(active_mode="plan")
+        discovery = ModeDiscovery(search_paths=[modes_dir])
+        hooks = ModeHooks(coordinator, discovery)
+
+        result = await hooks.handle_provider_request("provider:request", {})
+        content = result.context_injection
+        assert content.startswith('<system-reminder source="mode-plan">')
+        assert content.rstrip().endswith("</system-reminder>")

@@ -406,10 +406,16 @@ class ModeHooks:
         if not mode or not mode.context:
             return HookResult(action="continue")
 
-        # Wrap context in system-reminder tags
-        context_block = f"""<system-reminder source="mode-{mode.name}">
-{mode.context}
-</system-reminder>"""
+        # Wrap context in system-reminder tags with explicit MODE ACTIVE banner
+        context_block = (
+            f'<system-reminder source="mode-{mode.name}">\n'
+            f"MODE ACTIVE: {mode.name}\n"
+            f"You are CURRENTLY in {mode.name} mode. It is already active — "
+            f'do NOT call mode(set, "{mode.name}") to re-activate it. '
+            f"Follow the guidance below.\n\n"
+            f"{mode.context}\n"
+            f"</system-reminder>"
+        )
 
         return HookResult(
             action="inject_context",
