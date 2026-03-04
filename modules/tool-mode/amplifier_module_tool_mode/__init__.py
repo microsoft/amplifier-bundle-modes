@@ -205,6 +205,27 @@ class ModeTool:
                 },
             )
 
+        # Check allowed_transitions from current mode (if any)
+        current_mode_name = self.coordinator.session_state.get("active_mode")
+        if current_mode_name:
+            current_mode_def = discovery.find(current_mode_name) if discovery else None
+            if (
+                current_mode_def
+                and current_mode_def.allowed_transitions is not None
+                and name not in current_mode_def.allowed_transitions
+            ):
+                allowed = ", ".join(current_mode_def.allowed_transitions) or "(none)"
+                return ToolResult(
+                    success=False,
+                    error={
+                        "code": "transition_denied",
+                        "message": (
+                            f"Transition from '{current_mode_name}' to '{name}' is not allowed. "
+                            f"Allowed transitions: {allowed}."
+                        ),
+                    },
+                )
+
         # Apply gate policy
         if self.gate_policy == "warn":
             warn_key = f"set:{name}"
