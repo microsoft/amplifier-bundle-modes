@@ -117,6 +117,58 @@ class TestParseMode:
         assert result is not None
         assert result.allow_clear is True
 
+    def test_allowed_transitions_inline_list_parsed(self, tmp_path: Path) -> None:
+        mode_file = tmp_path / "guarded.md"
+        mode_file.write_text(
+            textwrap.dedent("""\
+                ---
+                mode:
+                  name: guarded
+                  description: "Guarded mode"
+                  allowed_transitions: [next, other]
+                  tools:
+                    safe: [read_file]
+                  default_action: block
+                ---
+                # Guarded Mode
+                Content here.
+            """),
+            encoding="utf-8",
+        )
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allowed_transitions == ["next", "other"]
+
+    def test_allow_clear_true_explicit_parsed(self, tmp_path: Path) -> None:
+        mode_file = tmp_path / "open.md"
+        mode_file.write_text(
+            textwrap.dedent("""\
+                ---
+                mode:
+                  name: open
+                  description: "Open mode"
+                  allow_clear: true
+                  tools:
+                    safe: [read_file]
+                  default_action: block
+                ---
+                # Open Mode
+                Content here.
+            """),
+            encoding="utf-8",
+        )
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allow_clear is True
+
+    def test_missing_new_fields_uses_defaults(self, tmp_path: Path) -> None:
+        """Backward compat: absent fields = permissive defaults."""
+        mode_file = _create_mode_file(tmp_path, "legacy", "Legacy mode")
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allowed_transitions is None  # None = any transition OK
+        assert result.allow_clear is True  # True = clear is allowed
+
 
 class TestModeDiscovery:
     """Tests for ModeDiscovery search path behavior."""
