@@ -205,6 +205,27 @@ class ModeTool:
                 },
             )
 
+        # Check allowed_transitions from current mode (if any)
+        current_mode_name = self.coordinator.session_state.get("active_mode")
+        if current_mode_name:
+            current_mode_def = discovery.find(current_mode_name) if discovery else None
+            if (
+                current_mode_def
+                and current_mode_def.allowed_transitions is not None
+                and name not in current_mode_def.allowed_transitions
+            ):
+                allowed = ", ".join(current_mode_def.allowed_transitions) or "(none)"
+                return ToolResult(
+                    success=False,
+                    error={
+                        "code": "transition_denied",
+                        "message": (
+                            f"Transition from '{current_mode_name}' to '{name}' is not allowed. "
+                            f"Allowed transitions: {allowed}."
+                        ),
+                    },
+                )
+
         # Apply gate policy
         if self.gate_policy == "warn":
             warn_key = f"set:{name}"
@@ -275,8 +296,64 @@ class ModeTool:
         )
 
     async def _handle_clear(self) -> ToolResult:
-        """Deactivate the current mode."""
-        previous = self.coordinator.session_state.get("active_mode")
+        """Deactivate the current mode (subject to allow_clear and gate policy)."""
+        current_mode_name = self.coordinator.session_state.get("active_mode")
+
+        # Check allow_clear from current mode (if any)
+        if current_mode_name:
+            discovery = self._get_discovery()
+            current_mode_def = discovery.find(current_mode_name) if discovery else None
+            if current_mode_def and not current_mode_def.allow_clear:
+                allowed = ""
+                if current_mode_def.allowed_transitions:
+                    allowed = ", ".join(current_mode_def.allowed_transitions)
+                return ToolResult(
+                    success=False,
+                    error={
+                        "code": "clear_denied",
+                        "message": (
+                            f"Cannot clear mode while in '{current_mode_name}'. "
+                            f"Transition to a valid next mode instead."
+                            + (f" Allowed transitions: {allowed}." if allowed else "")
+                        ),
+                    },
+                )
+
+        # Apply gate policy (same as _handle_set)
+        if self.gate_policy == "warn":
+            warn_key = "clear"
+            if warn_key not in self._warned_transitions:
+                self._warned_transitions.add(warn_key)
+                return ToolResult(
+                    success=False,
+                    output={
+                        "status": "denied",
+                        "user_instruction": (
+                            "Inform the user: I'd like to clear the current mode"
+                            + (f" ('{current_mode_name}')" if current_mode_name else "")
+                            + " and remove all tool restrictions. "
+                            "You can clear manually with /mode off or I can retry to proceed."
+                        ),
+                    },
+                )
+
+        elif self.gate_policy == "confirm":
+            return ToolResult(
+                success=False,
+                output={
+                    "status": "denied",
+                    "user_instruction": (
+                        "Inform the user: I'd like to clear the current mode"
+                        + (f" ('{current_mode_name}')" if current_mode_name else "")
+                        + " and remove all tool restrictions. "
+                        "You can clear manually with /mode off or grant permission "
+                        "for me to manage mode transitions."
+                    ),
+                },
+            )
+
+        # Gate passed (auto, or warn retry) - perform the clear
+        previous = current_mode_name
         self.coordinator.session_state["active_mode"] = None
 
         # Reset tool warnings

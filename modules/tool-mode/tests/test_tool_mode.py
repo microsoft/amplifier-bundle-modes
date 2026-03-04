@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,11 +17,44 @@ def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
             ---
             mode:
               name: {name}
-              description: "{description or name + ' mode'}"
+              description: "{description or name + " mode"}"
               tools:
                 safe: [read_file, grep]
                 warn: [bash]
               default_action: block
+            ---
+            # {name.title()} Mode
+            You are in {name} mode.
+        """),
+        encoding="utf-8",
+    )
+    return mode_file
+
+
+def _create_mode_file_with_transitions(
+    path: Path,
+    name: str,
+    allowed_transitions: list[str] | None = None,
+    description: str = "",
+) -> Path:
+    """Create a mode .md file with allowed_transitions set."""
+    if allowed_transitions is not None:
+        items = ", ".join(allowed_transitions)
+        # 14 spaces matches the nesting level inside textwrap.dedent block (12 base + 2 indent)
+        transitions_yaml = f"\n              allowed_transitions: [{items}]"
+    else:
+        transitions_yaml = ""
+    mode_file = path / f"{name}.md"
+    mode_file.write_text(
+        textwrap.dedent(f"""\
+            ---
+            mode:
+              name: {name}
+              description: "{description or name + " mode"}"
+              tools:
+                safe: [read_file, grep]
+                warn: [bash]
+              default_action: block{transitions_yaml}
             ---
             # {name.title()} Mode
             You are in {name} mode.
@@ -94,9 +126,7 @@ class TestModeToolCurrent:
     async def test_current_when_active(self, tmp_path: Path) -> None:
         from amplifier_module_tool_mode import ModeTool
 
-        coordinator = _make_coordinator(
-            tmp_path, ["plan"], active_mode="plan"
-        )
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode="plan")
         tool = ModeTool(config={}, coordinator=coordinator)
 
         result = await tool.execute({"operation": "current"})
@@ -163,6 +193,7 @@ class TestModeToolSet:
 
         result = await tool.execute({"operation": "set", "name": "nonexistent"})
         assert result.success is False
+        assert result.error is not None
         assert result.error["code"] == "mode_not_found"
 
     @pytest.mark.asyncio
@@ -174,6 +205,7 @@ class TestModeToolSet:
 
         result = await tool.execute({"operation": "set"})
         assert result.success is False
+        assert result.error is not None
         assert result.error["code"] == "missing_name"
 
     @pytest.mark.asyncio
@@ -217,9 +249,7 @@ class TestModeToolSet:
         assert result2.output["denied_mode"] == "review"
 
     @pytest.mark.asyncio
-    async def test_set_confirm_policy_always_denies(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_set_confirm_policy_always_denies(self, tmp_path: Path) -> None:
         from amplifier_module_tool_mode import ModeTool
 
         coordinator = _make_coordinator(tmp_path, ["plan"])
@@ -239,9 +269,7 @@ class TestModeToolClear:
     async def test_clear_deactivates_mode(self, tmp_path: Path) -> None:
         from amplifier_module_tool_mode import ModeTool
 
-        coordinator = _make_coordinator(
-            tmp_path, ["plan"], active_mode="plan"
-        )
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode="plan")
         tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
 
         result = await tool.execute({"operation": "clear"})
@@ -253,9 +281,7 @@ class TestModeToolClear:
     async def test_clear_resets_warnings(self, tmp_path: Path) -> None:
         from amplifier_module_tool_mode import ModeTool
 
-        coordinator = _make_coordinator(
-            tmp_path, ["plan"], active_mode="plan"
-        )
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode="plan")
         tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
 
         await tool.execute({"operation": "clear"})
@@ -284,8 +310,9 @@ class TestModeToolClear:
         await tool.execute({"operation": "set", "name": "plan"})  # denied
         await tool.execute({"operation": "set", "name": "plan"})  # allowed
 
-        # Clear
-        await tool.execute({"operation": "clear"})
+        # Clear (warn gate: first denied, second allowed)
+        await tool.execute({"operation": "clear"})  # denied (clear warn)
+        await tool.execute({"operation": "clear"})  # allowed - actually clears
 
         # Now try again - should warn again (fresh start)
         result = await tool.execute({"operation": "set", "name": "plan"})
@@ -305,6 +332,7 @@ class TestModeToolEdgeCases:
 
         result = await tool.execute({"operation": "invalid"})
         assert result.success is False
+        assert result.error is not None
         assert result.error["code"] == "invalid_operation"
 
     @pytest.mark.asyncio
@@ -316,6 +344,7 @@ class TestModeToolEdgeCases:
 
         result = await tool.execute({})
         assert result.success is False
+        assert result.error is not None
         assert result.error["code"] == "invalid_operation"
 
     @pytest.mark.asyncio
@@ -328,6 +357,7 @@ class TestModeToolEdgeCases:
 
         result = await tool.execute({"operation": "list"})
         assert result.success is False
+        assert result.error is not None
         assert result.error["code"] == "hooks_mode_not_mounted"
 
     @pytest.mark.asyncio
@@ -404,3 +434,317 @@ class TestMount:
         # Should not crash - just warn
         await mount(coordinator)
         coordinator.mount.assert_called_once()
+
+
+def _create_mode_file_with_clear_policy(
+    path: Path,
+    name: str,
+    allow_clear: bool = True,
+    allowed_transitions: list[str] | None = None,
+    description: str = "",
+) -> Path:
+    """Create a mode .md file with allow_clear and optional allowed_transitions set."""
+    allow_clear_yaml = f"\n              allow_clear: {str(allow_clear).lower()}"
+    if allowed_transitions is not None:
+        items = ", ".join(allowed_transitions)
+        transitions_yaml = f"\n              allowed_transitions: [{items}]"
+    else:
+        transitions_yaml = ""
+    mode_file = path / f"{name}.md"
+    mode_file.write_text(
+        textwrap.dedent(f"""\
+            ---
+            mode:
+              name: {name}
+              description: "{description or name + " mode"}"
+              tools:
+                safe: [read_file, grep]
+                warn: [bash]
+              default_action: block{allow_clear_yaml}{transitions_yaml}
+            ---
+            # {name.title()} Mode
+            You are in {name} mode.
+        """),
+        encoding="utf-8",
+    )
+    return mode_file
+
+
+def _make_coordinator_with_modes_dir(
+    modes_dir: Path,
+    active_mode: str | None = None,
+) -> MagicMock:
+    """Create a mock coordinator from an already-populated modes directory."""
+    from amplifier_module_hooks_mode import ModeDiscovery
+
+    discovery = ModeDiscovery(search_paths=[modes_dir])
+
+    hooks = MagicMock()
+    hooks.reset_warnings = MagicMock()
+
+    coordinator = MagicMock()
+    coordinator.session_state = {
+        "active_mode": active_mode,
+        "mode_discovery": discovery,
+        "mode_hooks": hooks,
+    }
+    return coordinator
+
+
+class TestAllowedTransitions:
+    """Tests for allowed_transitions enforcement in _handle_set."""
+
+    @pytest.mark.asyncio
+    async def test_allowed_transition_succeeds(self, tmp_path: Path) -> None:
+        """When target mode is in allowed_transitions, transition should succeed."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(
+            modes_dir, "plan", allowed_transitions=["review", "code"]
+        )
+        _create_mode_file(modes_dir, "review")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "review"})
+
+        assert result.success is True
+        assert result.output["status"] == "activated"
+        assert result.output["mode"] == "review"
+
+    @pytest.mark.asyncio
+    async def test_denied_transition_returns_error(self, tmp_path: Path) -> None:
+        """When target mode is NOT in allowed_transitions, return transition_denied error."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(
+            modes_dir, "plan", allowed_transitions=["review"]
+        )
+        _create_mode_file(modes_dir, "code")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "code"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["code"] == "transition_denied"
+        assert "plan" in result.error["message"]
+        assert "code" in result.error["message"]
+        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+
+    @pytest.mark.asyncio
+    async def test_no_allowed_transitions_allows_any(self, tmp_path: Path) -> None:
+        """When allowed_transitions is None (absent), any transition is allowed."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "plan")  # No allowed_transitions field
+        _create_mode_file(modes_dir, "review")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "review"})
+
+        assert result.success is True
+        assert result.output["status"] == "activated"
+
+    @pytest.mark.asyncio
+    async def test_transition_check_before_gate_policy(self, tmp_path: Path) -> None:
+        """Denied transitions get hard error even with warn gate policy."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(
+            modes_dir, "plan", allowed_transitions=["review"]
+        )
+        _create_mode_file(modes_dir, "code")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "warn"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "code"})
+
+        # Should get a hard error (result.error), not a warn "denied" in result.output
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["code"] == "transition_denied"
+
+    @pytest.mark.asyncio
+    async def test_no_active_mode_allows_any(self, tmp_path: Path) -> None:
+        """When no mode is active, any mode can be set (no current restrictions)."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(
+            modes_dir, "plan", allowed_transitions=["review"]
+        )
+        _create_mode_file(modes_dir, "code")  # NOT in plan's allowed list
+
+        # active_mode=None → no current mode to enforce transitions from
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode=None)
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "code"})
+
+        assert result.success is True
+        assert result.output["status"] == "activated"
+
+    @pytest.mark.asyncio
+    async def test_empty_allowed_transitions_locks_mode(self, tmp_path: Path) -> None:
+        """When allowed_transitions is [] (empty list), no transitions are possible."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(modes_dir, "plan", allowed_transitions=[])
+        _create_mode_file(modes_dir, "review")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "review"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["code"] == "transition_denied"
+        assert "(none)" in result.error["message"]
+
+
+class TestModeToolClearEnforcement:
+    """Tests for allow_clear enforcement and gate policy in _handle_clear."""
+
+    @pytest.mark.asyncio
+    async def test_clear_denied_when_allow_clear_false(self, tmp_path: Path) -> None:
+        """Clear is denied when current mode has allow_clear: false."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_clear_policy(
+            modes_dir, "plan", allow_clear=False, allowed_transitions=["review"]
+        )
+        _create_mode_file(modes_dir, "review")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["code"] == "clear_denied"
+        assert "plan" in result.error["message"]
+        assert "review" in result.error["message"]  # allowed transitions mentioned
+        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+
+    @pytest.mark.asyncio
+    async def test_clear_allowed_when_allow_clear_true(self, tmp_path: Path) -> None:
+        """Clear succeeds when current mode has allow_clear: true."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_clear_policy(modes_dir, "plan", allow_clear=True)
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is True
+        assert result.output["status"] == "cleared"
+        assert coordinator.session_state["active_mode"] is None
+
+    @pytest.mark.asyncio
+    async def test_clear_allowed_when_allow_clear_absent(self, tmp_path: Path) -> None:
+        """Clear succeeds when mode file has no allow_clear field (backward compat)."""
+        from amplifier_module_tool_mode import ModeTool
+
+        # Use original _make_coordinator which creates modes without allow_clear field
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is True
+        assert result.output["status"] == "cleared"
+
+    @pytest.mark.asyncio
+    async def test_warn_policy_first_clear_denied_second_succeeds(
+        self, tmp_path: Path
+    ) -> None:
+        """With warn gate, first clear is denied with instruction, second succeeds."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_clear_policy(modes_dir, "plan", allow_clear=True)
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "warn"}, coordinator=coordinator)
+
+        # First clear: denied (warn gate)
+        result1 = await tool.execute({"operation": "clear"})
+        assert result1.success is False
+        assert result1.output["status"] == "denied"
+        assert "user_instruction" in result1.output
+        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+
+        # Second clear: allowed (warn gate passed)
+        result2 = await tool.execute({"operation": "clear"})
+        assert result2.success is True
+        assert result2.output["status"] == "cleared"
+        assert coordinator.session_state["active_mode"] is None
+
+    @pytest.mark.asyncio
+    async def test_confirm_policy_clear_always_denied(self, tmp_path: Path) -> None:
+        """With confirm gate, clear is always denied."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_clear_policy(modes_dir, "plan", allow_clear=True)
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "confirm"}, coordinator=coordinator)
+
+        result1 = await tool.execute({"operation": "clear"})
+        assert result1.success is False
+        assert result1.output["status"] == "denied"
+        assert "user_instruction" in result1.output
+
+        result2 = await tool.execute({"operation": "clear"})
+        assert result2.success is False
+        assert result2.output["status"] == "denied"
+
+    @pytest.mark.asyncio
+    async def test_allow_clear_false_takes_precedence_over_auto_gate(
+        self, tmp_path: Path
+    ) -> None:
+        """allow_clear: false always denies, even with auto gate policy."""
+        from amplifier_module_tool_mode import ModeTool
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_clear_policy(modes_dir, "plan", allow_clear=False)
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["code"] == "clear_denied"
+        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged

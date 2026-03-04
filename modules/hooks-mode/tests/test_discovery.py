@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 
-from amplifier_module_hooks_mode import ModeDiscovery, parse_mode_file
+from amplifier_module_hooks_mode import ModeDefinition, ModeDiscovery, parse_mode_file
 
 
 def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
@@ -56,6 +56,118 @@ class TestParseMode:
 
     def test_nonexistent_file(self, tmp_path: Path) -> None:
         assert parse_mode_file(tmp_path / "nonexistent.md") is None
+
+    def test_parse_allowed_transitions(self, tmp_path: Path) -> None:
+        """parse_mode_file must extract allowed_transitions from mode: section."""
+        mode_file = tmp_path / "strict.md"
+        mode_file.write_text(
+            textwrap.dedent("""\
+                ---
+                mode:
+                  name: strict
+                  description: Strict mode
+                  allowed_transitions:
+                    - plan
+                    - review
+                  default_action: block
+                ---
+                # Strict Mode
+                You are in strict mode.
+            """),
+            encoding="utf-8",
+        )
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allowed_transitions == ["plan", "review"]
+
+    def test_parse_allowed_transitions_absent_defaults_to_none(
+        self, tmp_path: Path
+    ) -> None:
+        """When allowed_transitions is absent, parse_mode_file must return None (not [])."""
+        mode_file = _create_mode_file(tmp_path, "basic", "Basic mode")
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allowed_transitions is None
+
+    def test_parse_allow_clear_false(self, tmp_path: Path) -> None:
+        """parse_mode_file must extract allow_clear=False from mode: section."""
+        mode_file = tmp_path / "locked.md"
+        mode_file.write_text(
+            textwrap.dedent("""\
+                ---
+                mode:
+                  name: locked
+                  description: Locked mode
+                  allow_clear: false
+                  default_action: block
+                ---
+                # Locked Mode
+                You are in locked mode.
+            """),
+            encoding="utf-8",
+        )
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allow_clear is False
+
+    def test_parse_allow_clear_absent_defaults_to_true(self, tmp_path: Path) -> None:
+        """When allow_clear is absent, parse_mode_file must default to True."""
+        mode_file = _create_mode_file(tmp_path, "basic2", "Basic mode")
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allow_clear is True
+
+    def test_allowed_transitions_inline_list_parsed(self, tmp_path: Path) -> None:
+        mode_file = tmp_path / "guarded.md"
+        mode_file.write_text(
+            textwrap.dedent("""\
+                ---
+                mode:
+                  name: guarded
+                  description: "Guarded mode"
+                  allowed_transitions: [next, other]
+                  tools:
+                    safe: [read_file]
+                  default_action: block
+                ---
+                # Guarded Mode
+                Content here.
+            """),
+            encoding="utf-8",
+        )
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allowed_transitions == ["next", "other"]
+
+    def test_allow_clear_true_explicit_parsed(self, tmp_path: Path) -> None:
+        mode_file = tmp_path / "open.md"
+        mode_file.write_text(
+            textwrap.dedent("""\
+                ---
+                mode:
+                  name: open
+                  description: "Open mode"
+                  allow_clear: true
+                  tools:
+                    safe: [read_file]
+                  default_action: block
+                ---
+                # Open Mode
+                Content here.
+            """),
+            encoding="utf-8",
+        )
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allow_clear is True
+
+    def test_missing_new_fields_uses_defaults(self, tmp_path: Path) -> None:
+        """Backward compat: absent fields = permissive defaults."""
+        mode_file = _create_mode_file(tmp_path, "legacy", "Legacy mode")
+        result = parse_mode_file(mode_file)
+        assert result is not None
+        assert result.allowed_transitions is None  # None = any transition OK
+        assert result.allow_clear is True  # True = clear is allowed
 
 
 class TestModeDiscovery:
@@ -253,3 +365,42 @@ class TestBundleDiscovery:
         coordinator.get_capability.reset_mock()
         discovery.find("once")
         coordinator.get_capability.assert_not_called()
+
+
+class TestModeDefinitionNewFields:
+    """Task 1: ModeDefinition must have allowed_transitions and allow_clear fields."""
+
+    def test_allowed_transitions_defaults_to_none(self) -> None:
+        """allowed_transitions must default to None (unrestricted), not empty list."""
+        mode = ModeDefinition(name="test")
+        assert mode.allowed_transitions is None
+
+    def test_allow_clear_defaults_to_true(self) -> None:
+        """allow_clear must default to True (backward compatible)."""
+        mode = ModeDefinition(name="test")
+        assert mode.allow_clear is True
+
+    def test_allowed_transitions_can_be_set_to_list(self) -> None:
+        """allowed_transitions can be set to a list of mode names."""
+        mode = ModeDefinition(name="test", allowed_transitions=["plan", "review"])
+        assert mode.allowed_transitions == ["plan", "review"]
+
+    def test_allow_clear_can_be_set_to_false(self) -> None:
+        """allow_clear can be explicitly set to False."""
+        mode = ModeDefinition(name="test", allow_clear=False)
+        assert mode.allow_clear is False
+
+    def test_existing_fields_unaffected(self) -> None:
+        """Adding new fields must not change existing field behavior."""
+        mode = ModeDefinition(
+            name="plan",
+            description="Think",
+            default_action="block",
+        )
+        assert mode.name == "plan"
+        assert mode.description == "Think"
+        assert mode.default_action == "block"
+        assert mode.safe_tools == []
+        assert mode.warn_tools == []
+        assert mode.confirm_tools == []
+        assert mode.block_tools == []
