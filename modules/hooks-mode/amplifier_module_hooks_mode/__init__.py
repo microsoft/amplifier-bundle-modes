@@ -40,6 +40,8 @@ class ModeDefinition:
     confirm_tools: list[str] = field(default_factory=list)  # Require user approval
     block_tools: list[str] = field(default_factory=list)
     default_action: str = "block"  # "block" or "allow"
+    allowed_transitions: list[str] | None = None  # None = any transition allowed
+    allow_clear: bool = True  # False = mode(clear) denied
 
 
 def parse_mode_file(file_path: Path) -> ModeDefinition | None:

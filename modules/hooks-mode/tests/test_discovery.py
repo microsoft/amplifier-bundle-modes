@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 
-from amplifier_module_hooks_mode import ModeDiscovery, parse_mode_file
+from amplifier_module_hooks_mode import ModeDefinition, ModeDiscovery, parse_mode_file
 
 
 def _create_mode_file(path: Path, name: str, description: str = "") -> Path:
@@ -253,3 +253,42 @@ class TestBundleDiscovery:
         coordinator.get_capability.reset_mock()
         discovery.find("once")
         coordinator.get_capability.assert_not_called()
+
+
+class TestModeDefinitionNewFields:
+    """Task 1: ModeDefinition must have allowed_transitions and allow_clear fields."""
+
+    def test_allowed_transitions_defaults_to_none(self) -> None:
+        """allowed_transitions must default to None (unrestricted), not empty list."""
+        mode = ModeDefinition(name="test")
+        assert mode.allowed_transitions is None
+
+    def test_allow_clear_defaults_to_true(self) -> None:
+        """allow_clear must default to True (backward compatible)."""
+        mode = ModeDefinition(name="test")
+        assert mode.allow_clear is True
+
+    def test_allowed_transitions_can_be_set_to_list(self) -> None:
+        """allowed_transitions can be set to a list of mode names."""
+        mode = ModeDefinition(name="test", allowed_transitions=["plan", "review"])
+        assert mode.allowed_transitions == ["plan", "review"]
+
+    def test_allow_clear_can_be_set_to_false(self) -> None:
+        """allow_clear can be explicitly set to False."""
+        mode = ModeDefinition(name="test", allow_clear=False)
+        assert mode.allow_clear is False
+
+    def test_existing_fields_unaffected(self) -> None:
+        """Adding new fields must not change existing field behavior."""
+        mode = ModeDefinition(
+            name="plan",
+            description="Think",
+            default_action="block",
+        )
+        assert mode.name == "plan"
+        assert mode.description == "Think"
+        assert mode.default_action == "block"
+        assert mode.safe_tools == []
+        assert mode.warn_tools == []
+        assert mode.confirm_tools == []
+        assert mode.block_tools == []
