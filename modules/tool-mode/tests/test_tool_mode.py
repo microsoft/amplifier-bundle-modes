@@ -89,7 +89,9 @@ def _make_coordinator(
     }
 
     coordinator = MagicMock()
-    coordinator.get_capability = MagicMock(side_effect=lambda key: capabilities.get(key))
+    coordinator.get_capability = MagicMock(
+        side_effect=lambda key: capabilities.get(key)
+    )
     coordinator.register_capability = MagicMock(
         side_effect=lambda key, value: capabilities.__setitem__(key, value)
     )
@@ -494,7 +496,9 @@ def _make_coordinator_with_modes_dir(
     }
 
     coordinator = MagicMock()
-    coordinator.get_capability = MagicMock(side_effect=lambda key: capabilities.get(key))
+    coordinator.get_capability = MagicMock(
+        side_effect=lambda key: capabilities.get(key)
+    )
     coordinator.register_capability = MagicMock(
         side_effect=lambda key, value: capabilities.__setitem__(key, value)
     )
