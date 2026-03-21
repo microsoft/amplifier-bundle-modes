@@ -69,7 +69,7 @@ def _make_coordinator(
     mode_names: list[str] | None = None,
     active_mode: str | None = None,
 ) -> MagicMock:
-    """Create a mock coordinator with mode_discovery and mode_hooks in session_state."""
+    """Create a mock coordinator with modes.discovery and modes.hooks capabilities."""
     from amplifier_module_hooks_mode import ModeDiscovery
 
     modes_dir = tmp_path / "modes"
@@ -82,12 +82,17 @@ def _make_coordinator(
     hooks = MagicMock()
     hooks.reset_warnings = MagicMock()
 
-    coordinator = MagicMock()
-    coordinator.session_state = {
-        "active_mode": active_mode,
-        "mode_discovery": discovery,
-        "mode_hooks": hooks,
+    capabilities: dict = {
+        "modes.discovery": discovery,
+        "modes.hooks": hooks,
+        "modes.active_mode": active_mode,
     }
+
+    coordinator = MagicMock()
+    coordinator.get_capability = MagicMock(side_effect=lambda key: capabilities.get(key))
+    coordinator.register_capability = MagicMock(
+        side_effect=lambda key, value: capabilities.__setitem__(key, value)
+    )
     return coordinator
 
 
@@ -160,7 +165,7 @@ class TestModeToolSet:
         assert result.success is True
         assert result.output["status"] == "activated"
         assert result.output["mode"] == "plan"
-        assert coordinator.session_state["active_mode"] == "plan"
+        assert coordinator.get_capability("modes.active_mode") == "plan"
 
     @pytest.mark.asyncio
     async def test_set_returns_tool_policies(self, tmp_path: Path) -> None:
@@ -182,7 +187,7 @@ class TestModeToolSet:
         tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
 
         await tool.execute({"operation": "set", "name": "plan"})
-        coordinator.session_state["mode_hooks"].reset_warnings.assert_called_once()
+        coordinator.get_capability("modes.hooks").reset_warnings.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_set_invalid_mode_rejected(self, tmp_path: Path) -> None:
@@ -222,13 +227,13 @@ class TestModeToolSet:
         assert result1.success is False
         assert result1.output["status"] == "denied"
         assert "user_instruction" in result1.output
-        assert coordinator.session_state["active_mode"] is None  # Not changed
+        assert coordinator.get_capability("modes.active_mode") is None  # Not changed
 
         # Second call: allowed
         result2 = await tool.execute({"operation": "set", "name": "plan"})
         assert result2.success is True
         assert result2.output["status"] == "activated"
-        assert coordinator.session_state["active_mode"] == "plan"
+        assert coordinator.get_capability("modes.active_mode") == "plan"
 
     @pytest.mark.asyncio
     async def test_set_warn_policy_resets_on_different_mode(
@@ -275,7 +280,7 @@ class TestModeToolClear:
         result = await tool.execute({"operation": "clear"})
         assert result.success is True
         assert result.output["status"] == "cleared"
-        assert coordinator.session_state["active_mode"] is None
+        assert coordinator.get_capability("modes.active_mode") is None
 
     @pytest.mark.asyncio
     async def test_clear_resets_warnings(self, tmp_path: Path) -> None:
@@ -285,7 +290,7 @@ class TestModeToolClear:
         tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
 
         await tool.execute({"operation": "clear"})
-        coordinator.session_state["mode_hooks"].reset_warnings.assert_called()
+        coordinator.get_capability("modes.hooks").reset_warnings.assert_called()
 
     @pytest.mark.asyncio
     async def test_clear_when_no_mode_active(self, tmp_path: Path) -> None:
@@ -352,7 +357,7 @@ class TestModeToolEdgeCases:
         from amplifier_module_tool_mode import ModeTool
 
         coordinator = MagicMock()
-        coordinator.session_state = {}  # No mode_discovery
+        coordinator.get_capability = MagicMock(return_value=None)
         tool = ModeTool(config={}, coordinator=coordinator)
 
         result = await tool.execute({"operation": "list"})
@@ -428,7 +433,7 @@ class TestMount:
         from amplifier_module_tool_mode import mount
 
         coordinator = MagicMock()
-        coordinator.session_state = {}  # No mode_discovery
+        coordinator.get_capability = MagicMock(return_value=None)
         coordinator.mount = AsyncMock()
 
         # Should not crash - just warn
@@ -482,12 +487,17 @@ def _make_coordinator_with_modes_dir(
     hooks = MagicMock()
     hooks.reset_warnings = MagicMock()
 
-    coordinator = MagicMock()
-    coordinator.session_state = {
-        "active_mode": active_mode,
-        "mode_discovery": discovery,
-        "mode_hooks": hooks,
+    capabilities: dict = {
+        "modes.discovery": discovery,
+        "modes.hooks": hooks,
+        "modes.active_mode": active_mode,
     }
+
+    coordinator = MagicMock()
+    coordinator.get_capability = MagicMock(side_effect=lambda key: capabilities.get(key))
+    coordinator.register_capability = MagicMock(
+        side_effect=lambda key, value: capabilities.__setitem__(key, value)
+    )
     return coordinator
 
 
@@ -537,7 +547,7 @@ class TestAllowedTransitions:
         assert result.error["code"] == "transition_denied"
         assert "plan" in result.error["message"]
         assert "code" in result.error["message"]
-        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+        assert coordinator.get_capability("modes.active_mode") == "plan"  # Unchanged
 
     @pytest.mark.asyncio
     async def test_no_allowed_transitions_allows_any(self, tmp_path: Path) -> None:
@@ -646,7 +656,7 @@ class TestModeToolClearEnforcement:
         assert result.error["code"] == "clear_denied"
         assert "plan" in result.error["message"]
         assert "review" in result.error["message"]  # allowed transitions mentioned
-        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+        assert coordinator.get_capability("modes.active_mode") == "plan"  # Unchanged
 
     @pytest.mark.asyncio
     async def test_clear_allowed_when_allow_clear_true(self, tmp_path: Path) -> None:
@@ -664,7 +674,7 @@ class TestModeToolClearEnforcement:
 
         assert result.success is True
         assert result.output["status"] == "cleared"
-        assert coordinator.session_state["active_mode"] is None
+        assert coordinator.get_capability("modes.active_mode") is None
 
     @pytest.mark.asyncio
     async def test_clear_allowed_when_allow_clear_absent(self, tmp_path: Path) -> None:
@@ -699,13 +709,13 @@ class TestModeToolClearEnforcement:
         assert result1.success is False
         assert result1.output["status"] == "denied"
         assert "user_instruction" in result1.output
-        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+        assert coordinator.get_capability("modes.active_mode") == "plan"  # Unchanged
 
         # Second clear: allowed (warn gate passed)
         result2 = await tool.execute({"operation": "clear"})
         assert result2.success is True
         assert result2.output["status"] == "cleared"
-        assert coordinator.session_state["active_mode"] is None
+        assert coordinator.get_capability("modes.active_mode") is None
 
     @pytest.mark.asyncio
     async def test_confirm_policy_clear_always_denied(self, tmp_path: Path) -> None:
@@ -747,4 +757,4 @@ class TestModeToolClearEnforcement:
         assert result.success is False
         assert result.error is not None
         assert result.error["code"] == "clear_denied"
-        assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+        assert coordinator.get_capability("modes.active_mode") == "plan"  # Unchanged

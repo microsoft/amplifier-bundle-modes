@@ -1,7 +1,7 @@
 """Mode management tool for agent-initiated mode transitions.
 
 Exposes a 'mode' tool that lets agents programmatically manage modes.
-Requires hooks-mode to be mounted (reads session_state["mode_discovery"]).
+Requires hooks-mode to be mounted (reads capabilities: modes.discovery, modes.hooks).
 """
 
 from __future__ import annotations
@@ -87,12 +87,12 @@ class ModeTool:
         }
 
     def _get_discovery(self) -> Any:
-        """Get ModeDiscovery from session_state."""
-        return self.coordinator.session_state.get("mode_discovery")
+        """Get ModeDiscovery from capabilities."""
+        return self.coordinator.get_capability("modes.discovery")
 
     def _get_hooks(self) -> Any:
-        """Get ModeHooks from session_state."""
-        return self.coordinator.session_state.get("mode_hooks")
+        """Get ModeHooks from capabilities."""
+        return self.coordinator.get_capability("modes.hooks")
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:
         """Execute a mode operation."""
@@ -133,7 +133,7 @@ class ModeTool:
     async def _handle_list(self, discovery: Any) -> ToolResult:
         """List all available modes."""
         modes_list = discovery.list_modes()
-        active = self.coordinator.session_state.get("active_mode")
+        active = self.coordinator.get_capability("modes.active_mode")
         return ToolResult(
             success=True,
             output={
@@ -147,7 +147,7 @@ class ModeTool:
 
     async def _handle_current(self, discovery: Any) -> ToolResult:
         """Show the currently active mode."""
-        active = self.coordinator.session_state.get("active_mode")
+        active = self.coordinator.get_capability("modes.active_mode")
         if not active:
             return ToolResult(
                 success=True,
@@ -206,7 +206,7 @@ class ModeTool:
             )
 
         # Check allowed_transitions from current mode (if any)
-        current_mode_name = self.coordinator.session_state.get("active_mode")
+        current_mode_name = self.coordinator.get_capability("modes.active_mode")
         if current_mode_name:
             current_mode_def = discovery.find(current_mode_name) if discovery else None
             if (
@@ -263,8 +263,8 @@ class ModeTool:
         return self._activate_mode(name, mode_def)
 
     def _activate_mode(self, name: str, mode_def: Any) -> ToolResult:
-        """Activate a mode: update session state, reset warnings, return info."""
-        self.coordinator.session_state["active_mode"] = name
+        """Activate a mode: update capabilities, reset warnings, return info."""
+        self.coordinator.register_capability("modes.active_mode", name)
 
         # Reset tool warnings for the new mode
         hooks = self._get_hooks()
@@ -297,7 +297,7 @@ class ModeTool:
 
     async def _handle_clear(self) -> ToolResult:
         """Deactivate the current mode (subject to allow_clear and gate policy)."""
-        current_mode_name = self.coordinator.session_state.get("active_mode")
+        current_mode_name = self.coordinator.get_capability("modes.active_mode")
 
         # Check allow_clear from current mode (if any)
         if current_mode_name:
@@ -354,7 +354,7 @@ class ModeTool:
 
         # Gate passed (auto, or warn retry) - perform the clear
         previous = current_mode_name
-        self.coordinator.session_state["active_mode"] = None
+        self.coordinator.register_capability("modes.active_mode", None)
 
         # Reset tool warnings
         hooks = self._get_hooks()
@@ -385,10 +385,10 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
     config = config or {}
 
     # Validate hooks-mode is mounted (or will be - check at first use)
-    if "mode_discovery" not in getattr(coordinator, "session_state", {}):
+    if coordinator.get_capability("modes.discovery") is None:
         logger.debug(
             "tool-mode: hooks-mode doesn't appear to be mounted yet. "
-            "mode_discovery not found in session_state. "
+            "modes.discovery not found in capabilities. "
             "The mode tool will validate at first use."
         )
 
