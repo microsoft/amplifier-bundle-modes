@@ -62,7 +62,7 @@ Create a markdown file with YAML frontmatter:
 mode:
   name: cautious
   description: Ask before any destructive action
-  shortcut: cautious
+  shortcut: cautious   # Optional; defaults to `name`. Use `shortcut: false` to disable.
   
   tools:
     safe:
@@ -100,9 +100,17 @@ Modes are discovered from (highest precedence first):
 
 > **Note**: In server/web deployments, "project" is determined by the `session.working_dir` capability, not the server process cwd. This enables correct mode discovery when Amplifier runs as a backend service.
 
+### Known Limitations
+
+> **CLI command name conflicts:** Modes named the same as built-in CLI commands (`help`, `mode`, `modes`, `exit`, `quit`) will have their default `/<name>` slash alias silently overridden by the CLI's built-in command dispatch. These modes remain activatable via `/mode <name>`. To give such a mode a working slash alias, set `shortcut:` explicitly to a non-reserved value.
+
+> **Opt-out syntax note:** `shortcut: false` (YAML boolean, unquoted) disables the alias. `shortcut: "false"` (quoted string) is a shortcut literally named `false` and registers `/false`. Use the unquoted boolean form to disable.
+
 ### Third-Party Bundle Modes
 
 Any bundle that includes `hooks-mode` can contribute custom modes by placing `.md` files in a `modes/` directory at the bundle root. These are auto-discovered at runtime — no special configuration needed beyond the directory convention.
+
+> **Naming guidance for third-party bundle authors:** Use descriptive, unique names (e.g. `systems-design` rather than `design`, `perf-audit` rather than `perf`). First-load wins silently on shortcut collision; the second bundle's shortcut is dropped with an INFO log. If two modes claim the same shortcut key, the one discovered first (based on search-path precedence) wins; the other can still be activated via `/mode <name>`.
 
 Example bundle structure:
 ```
@@ -129,7 +137,7 @@ All modes from all composed bundles appear in `/modes` and are activatable via `
 |-------|----------|-------------|
 | `name` | Yes | Mode identifier |
 | `description` | No | Shown when mode activates |
-| `shortcut` | No | Creates `/shortcut` alias command |
+| `shortcut` | No (defaults to `name`) | Slash-command alias. Defaults to the mode's `name` (lowercased). Set to `false` to disable. Must match `^[a-z][a-z0-9_-]*$` after lowercasing; invalid values log a warning and register no alias. |
 | `tools.safe` | No | Tools always allowed |
 | `tools.warn` | No | Tools that warn once, then allow |
 | `tools.confirm` | No | Tools that require user approval |
@@ -145,7 +153,7 @@ All modes from all composed bundles appear in `/modes` and are activatable via `
 | `/mode <name> off` | Explicit deactivate |
 | `/mode off` | Clear any active mode |
 | `/modes` | List available modes |
-| `/plan`, `/explore`, `/careful` | Shortcuts (if defined) |
+| `/<mode-name>` | Auto-generated shortcut for each mode (use `shortcut: false` to disable, or set `shortcut:` to override) |
 
 ## Architecture
 
