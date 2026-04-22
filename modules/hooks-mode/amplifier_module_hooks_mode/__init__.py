@@ -25,6 +25,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SHORTCUT_PATTERN = r"^[a-z][a-z0-9_-]*$"
+_SHORTCUT_RE = re.compile(_SHORTCUT_PATTERN)
+
+
+def _is_valid_shortcut(value: str) -> bool:
+    """True iff `value` matches the shortcut identifier grammar (see design §7.3)."""
+    return bool(_SHORTCUT_RE.match(value))
+
 
 @dataclass
 class ModeDefinition:
