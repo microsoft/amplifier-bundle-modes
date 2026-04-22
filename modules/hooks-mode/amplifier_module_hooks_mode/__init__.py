@@ -120,6 +120,9 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
     else:
         shortcut = resolved_name
 
+    if shortcut is not None:
+        shortcut = shortcut.lower()
+
     return ModeDefinition(
         name=resolved_name,
         description=mode_config.get("description", ""),
