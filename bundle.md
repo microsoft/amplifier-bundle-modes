@@ -29,7 +29,7 @@ Provides a generic mode system for Amplifier. Modes are runtime behavior overlay
 ## Built-in Modes
 
 - **plan** - Think and discuss, don't implement
-- **review** - Analyze and critique code without modifying
+- **careful** - Full capability with user confirmation for destructive actions
 - **explore** - Pure exploration, understand before acting
 
 ## Creating Custom Modes
