@@ -80,3 +80,61 @@ class TestShortcutDefaultFromName:
         mode_def = parse_mode_file(f)
         assert mode_def is not None
         assert mode_def.shortcut == "foo"  # §9.1 case 10
+
+
+class TestShortcutOptOut:
+    def test_false_opts_out(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "beta.md",
+            textwrap.dedent("""
+            mode:
+              name: beta
+              shortcut: false
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut is None  # type: ignore[union-attr]  # §9.1 case 4
+
+    def test_null_tolerated_as_opt_out(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "beta.md",
+            textwrap.dedent("""
+            mode:
+              name: beta
+              shortcut: null
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut is None  # type: ignore[union-attr]  # §9.1 case 5
+
+    def test_empty_string_tolerated_as_opt_out(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "beta.md",
+            textwrap.dedent("""
+            mode:
+              name: beta
+              shortcut: ""
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut is None  # type: ignore[union-attr]  # §9.1 case 6
+
+    def test_whitespace_only_string_opts_out(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "beta.md",
+            textwrap.dedent("""
+            mode:
+              name: beta
+              shortcut: "   "
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut is None  # type: ignore[union-attr]  # §7.5

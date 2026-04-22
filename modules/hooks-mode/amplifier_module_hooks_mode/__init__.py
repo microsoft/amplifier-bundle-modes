@@ -102,8 +102,11 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
     resolved_name = mode_config.get("name", file_path.stem)
 
     if "shortcut" in mode_config:
-        # (opt-out, bool-guard, string paths — added incrementally in T3/T4)
-        shortcut = mode_config["shortcut"]
+        raw = mode_config["shortcut"]
+        if raw is False or raw is None or raw == "" or raw == 0:
+            shortcut = None
+        else:
+            shortcut = str(raw).strip() or None
     else:
         shortcut = resolved_name
 
