@@ -8,8 +8,11 @@ explicit regression (T7), and shipped-modes lock (T17).
 from __future__ import annotations
 
 import logging
+import pathlib
 import textwrap
 from pathlib import Path
+
+import pytest
 
 from amplifier_module_hooks_mode import _SHORTCUT_PATTERN, _is_valid_shortcut  # type: ignore[attr-defined]
 from amplifier_module_hooks_mode import parse_mode_file
@@ -387,3 +390,42 @@ class TestIntegrationFakeBundle:
         disc._coordinator.get_capability.return_value = None
         result = disc.get_shortcuts()
         assert result == {"alpha": "alpha", "g": "gamma"}  # no `beta` key
+
+
+BUNDLE_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+
+class TestShippedModesUnchanged:
+    """§8: the three shipped modes (careful, plan, explore) keep explicit shortcuts
+    as in-repo reference. This test prevents an accidental removal."""
+
+    @pytest.mark.parametrize(
+        "mode_name,expected_shortcut",
+        [
+            ("careful", "careful"),
+            ("plan", "plan"),
+            ("explore", "explore"),
+        ],
+    )
+    def test_shipped_mode_shortcut(
+        self, mode_name: str, expected_shortcut: str
+    ) -> None:
+        path = BUNDLE_ROOT / "modes" / f"{mode_name}.md"
+        assert path.is_file(), f"shipped mode file missing: {path}"
+        mode_def = parse_mode_file(path)
+        assert mode_def is not None
+        assert mode_def.shortcut == expected_shortcut, (
+            f"Shipped mode {mode_name} lost its explicit shortcut. "
+            f"Per design §8, shipped modes keep explicit shortcut: as reference."
+        )
+
+    def test_shipped_mode_files_retain_explicit_shortcut_line(self) -> None:
+        """Defense in depth — read the raw file and check the literal `shortcut:` token
+        appears, so a refactor that removes the field (relying on the new default) would
+        also fail this test. Prevents silent drift of the reference examples."""
+        for name in ("careful", "plan", "explore"):
+            text = (BUNDLE_ROOT / "modes" / f"{name}.md").read_text()
+            assert "shortcut:" in text, (
+                f"modes/{name}.md lost its explicit `shortcut:` line. Per design §8, "
+                f"shipped modes are canonical reference examples and must keep the field."
+            )
