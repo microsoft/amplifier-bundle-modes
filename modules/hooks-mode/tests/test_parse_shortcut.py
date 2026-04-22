@@ -221,3 +221,79 @@ class TestShortcutLowercase:
         """).strip(),
         )
         assert parse_mode_file(f).shortcut == "mymode"  # type: ignore[union-attr]  # §9.1 case 13
+
+
+class TestShortcutValidation:
+    def test_whitespace_interior_invalid(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: m
+              shortcut: "  my mode  "
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def.shortcut is None  # type: ignore[union-attr]  # §9.1 case 7
+        assert any(
+            "not a valid slash-command identifier" in r.message for r in caplog.records
+        )
+
+    def test_slash_invalid(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: m
+              shortcut: "my/mode"
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def.shortcut is None  # type: ignore[union-attr]  # §9.1 case 8
+        assert any(
+            "not a valid slash-command identifier" in r.message for r in caplog.records
+        )
+
+    def test_invalid_name_propagates_to_default_shortcut(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: "my mode"
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def is not None
+        assert mode_def.name == "my mode"  # mode still loads
+        assert mode_def.shortcut is None  # §9.1 case 9 — invalid
+
+    def test_leading_digit_invalid(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: m
+              shortcut: "0mode"
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def.shortcut is None  # type: ignore[union-attr]  # §9.1 case 15
+        assert any(
+            "not a valid slash-command identifier" in r.message for r in caplog.records
+        )

@@ -123,6 +123,18 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
     if shortcut is not None:
         shortcut = shortcut.lower()
 
+    if shortcut is not None and not _is_valid_shortcut(shortcut):
+        logger.warning(
+            "Mode file %s: shortcut %r is not a valid slash-command identifier "
+            "(must match %s); no alias will be registered. "
+            "The mode remains activatable via `/mode %s`.",
+            file_path,
+            shortcut,
+            _SHORTCUT_PATTERN,
+            resolved_name,
+        )
+        shortcut = None
+
     return ModeDefinition(
         name=resolved_name,
         description=mode_config.get("description", ""),
