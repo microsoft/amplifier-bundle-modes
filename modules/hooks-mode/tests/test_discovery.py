@@ -404,3 +404,51 @@ class TestModeDefinitionNewFields:
         assert mode.warn_tools == []
         assert mode.confirm_tools == []
         assert mode.block_tools == []
+
+
+class TestGetShortcutsNameAsValue:
+    def test_default_shortcut_value_is_name(self, tmp_path):
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        (modes_dir / "alpha.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode:
+                  name: alpha
+                  tools: {safe: []}
+                  default_action: block
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        disc = ModeDiscovery(search_paths=[(modes_dir, "test")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.capabilities = MagicMock()
+        disc._coordinator.capabilities.get.return_value = None
+        result = disc.get_shortcuts()
+        assert result == {"alpha": "alpha"}  # §9.2 case 1
+
+    def test_stem_differs_from_name(self, tmp_path):
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        (modes_dir / "my_mode.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode:
+                  name: my-mode
+                  tools: {safe: []}
+                  default_action: block
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        disc = ModeDiscovery(search_paths=[(modes_dir, "test")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.capabilities = MagicMock()
+        disc._coordinator.capabilities.get.return_value = None
+        result = disc.get_shortcuts()
+        # Key = shortcut (defaults to name, lowercased) = "my-mode"
+        # Value = mode_def.name = "my-mode" (NOT "my_mode" stem)
+        assert result == {"my-mode": "my-mode"}  # §9.2 case 7 — MINOR-1
