@@ -395,7 +395,7 @@ class ModeDiscovery:
                 if mode_def:
                     self._cache[name] = mode_def
                     if mode_def.shortcut and mode_def.shortcut not in shortcuts:
-                        shortcuts[mode_def.shortcut] = name
+                        shortcuts[mode_def.shortcut] = mode_def.name
 
         return shortcuts
 
