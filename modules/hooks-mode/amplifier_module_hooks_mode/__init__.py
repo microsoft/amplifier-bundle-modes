@@ -391,11 +391,27 @@ class ModeDiscovery:
                 continue
             for mode_file in base_path.glob("*.md"):
                 name = mode_file.stem
-                mode_def = self._cache.get(name) or parse_mode_file(mode_file)
+                # Always freshly parse each file so collision detection can compare
+                # mode_def.name values across search paths (same-stem files in different
+                # bundles may have different YAML name: fields).  Still update the cache
+                # so find() callers benefit from the parsed result.
+                mode_def = parse_mode_file(mode_file)
                 if mode_def:
                     self._cache[name] = mode_def
-                    if mode_def.shortcut and mode_def.shortcut not in shortcuts:
-                        shortcuts[mode_def.shortcut] = mode_def.name
+                    if mode_def.shortcut:
+                        if mode_def.shortcut in shortcuts:
+                            existing_name = shortcuts[mode_def.shortcut]
+                            if existing_name != mode_def.name:
+                                logger.info(
+                                    "Shortcut collision: /%s claimed by mode %r (precedence) "
+                                    "and again by mode %r (skipped). Set `shortcut:` explicitly "
+                                    "on one of them to disambiguate, or `shortcut: false` to disable.",
+                                    mode_def.shortcut,
+                                    existing_name,
+                                    mode_def.name,
+                                )
+                        else:
+                            shortcuts[mode_def.shortcut] = mode_def.name
 
         return shortcuts
 

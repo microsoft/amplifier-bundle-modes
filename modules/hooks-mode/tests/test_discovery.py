@@ -452,3 +452,130 @@ class TestGetShortcutsNameAsValue:
         # Key = shortcut (defaults to name, lowercased) = "my-mode"
         # Value = mode_def.name = "my-mode" (NOT "my_mode" stem)
         assert result == {"my-mode": "my-mode"}  # §9.2 case 7 — MINOR-1
+
+
+class TestGetShortcutsCollision:
+    def test_collision_across_search_paths_logs_info(self, tmp_path, caplog):
+        import logging
+
+        path_a = tmp_path / "a" / "modes"
+        path_a.mkdir(parents=True)
+        path_b = tmp_path / "b" / "modes"
+        path_b.mkdir(parents=True)
+        for p, n in [(path_a, "review"), (path_b, "review")]:
+            (p / "review.md").write_text(
+                textwrap.dedent(f"""
+                    ---
+                    mode:
+                      name: {n}
+                      tools: {{safe: []}}
+                      default_action: block
+                    ---
+                    body
+                """).strip()
+                + "\n"
+            )
+        disc = ModeDiscovery(search_paths=[(path_a, "a"), (path_b, "b")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.get_capability.return_value = None
+        with caplog.at_level(logging.INFO, logger="amplifier_module_hooks_mode"):
+            result = disc.get_shortcuts()
+        assert result == {"review": "review"}  # first-wins
+        # Names equal -> `existing_name != mode_def.name` is False -> no log emitted.
+        # Following §4.2 code (authoritative). §9.2 case 8 variant-1 prose corrected in Rev 2.
+        # This test asserts the code behavior: same-name collisions are silent.
+        assert not any("collision" in r.message.lower() for r in caplog.records)
+
+    def test_collision_with_different_names_logs_info(self, tmp_path, caplog):
+        """Two files claiming the same shortcut key but with different resolved names —
+        the genuine collision case. §9.2 case 8 variant 2; MINOR-1 guard."""
+        import logging
+
+        path_a = tmp_path / "a" / "modes"
+        path_a.mkdir(parents=True)
+        path_b = tmp_path / "b" / "modes"
+        path_b.mkdir(parents=True)
+        (path_a / "review.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: review, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        (path_b / "review.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: review-other, shortcut: review, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        disc = ModeDiscovery(search_paths=[(path_a, "a"), (path_b, "b")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.get_capability.return_value = None
+        with caplog.at_level(logging.INFO, logger="amplifier_module_hooks_mode"):
+            result = disc.get_shortcuts()
+        assert result == {"review": "review"}  # first-wins by precedence
+        assert any(
+            "collision" in r.message.lower() and "review-other" in r.message
+            for r in caplog.records
+        )
+
+    def test_explicit_shortcut_collision(self, tmp_path, caplog):
+        """Two modes with explicit but conflicting shortcuts. §9.2 case 5."""
+        import logging
+
+        modes = tmp_path / "modes"
+        modes.mkdir()
+        (modes / "a.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: alpha, shortcut: x, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        (modes / "b.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: beta, shortcut: x, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        disc = ModeDiscovery(search_paths=[(modes, "test")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.get_capability.return_value = None
+        with caplog.at_level(logging.INFO, logger="amplifier_module_hooks_mode"):
+            disc.get_shortcuts()
+        assert any("collision" in r.message.lower() for r in caplog.records)
+
+    def test_invalid_shortcut_excluded_from_get_shortcuts(self, tmp_path):
+        """§9.2 case 6 direct: a mode with an invalid shortcut is absent from get_shortcuts output."""
+        from textwrap import dedent
+
+        mode_dir = tmp_path / "modes"
+        mode_dir.mkdir()
+        (mode_dir / "bad.md").write_text(
+            dedent(
+                """\
+            ---
+            mode:
+              name: bad
+              shortcut: "bad name"
+            ---
+            """
+            )
+        )
+        disc = ModeDiscovery(search_paths=[(mode_dir, "test")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.get_capability.return_value = None
+        shortcuts = disc.get_shortcuts()
+        assert "bad name" not in shortcuts
+        assert "bad" not in shortcuts  # the name itself shouldn't sneak in either
+        assert shortcuts == {}  # nothing else is around in this tmp dir
