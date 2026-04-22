@@ -43,6 +43,55 @@ Users can create custom modes by adding `.md` files to:
 
 Mode files use YAML frontmatter with a `mode:` section defining name, description, and tool policies, followed by markdown content that gets injected as guidance.
 
+### Mode Configuration
+
+Every mode file has this structure:
+
+```yaml
+---
+mode:
+  name: my-mode             # Required in practice; defaults to filename stem if omitted
+  description: "What this mode does"
+  shortcut: my-mode         # Optional; defaults to the mode's name (lowercased) when omitted
+  tools:
+    safe: [read_file, grep] # Always allowed
+    warn: [bash]            # Allowed after first warning
+    confirm: [write_file]   # Requires user approval
+    block: [delete_file]    # Never allowed
+  default_action: block     # What to do with unlisted tools: "block" or "allow"
+---
+
+Markdown guidance injected as context when the mode is active.
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Recommended | The mode's identifier. Defaults to the filename stem if omitted. |
+| `description` | No | Human-readable description shown in `/modes` output. |
+| `shortcut` | No (defaults to `name`) | Slash-command alias. When omitted, defaults to the mode's `name` (lowercased), registering `/<name>` automatically. Set `shortcut: false` to disable the alias entirely. Must match `^[a-z][a-z0-9_-]*$` after lowercasing; invalid values log a warning and register no alias. |
+| `tools.safe` | No | Tools always allowed. |
+| `tools.warn` | No | Tools allowed after a one-time warning. |
+| `tools.confirm` | No | Tools requiring user approval. |
+| `tools.block` | No | Tools never allowed. |
+| `default_action` | No | Policy for unlisted tools: `"block"` (default) or `"allow"`. |
+
+**Shortcut field details:**
+
+- **Default behavior:** If `shortcut:` is omitted, the mode registers `/<name>` automatically (lowercased). For example, a mode with `name: systems-design` gets `/systems-design` for free.
+- **Opt-out:** Set `shortcut: false` (YAML boolean, unquoted) to disable the alias. The mode remains activatable via `/mode <name>`.
+- **Explicit shortcut:** Set `shortcut: sdr` to register `/sdr` instead of `/<name>`.
+- **YAML distinction:** `shortcut: false` (YAML boolean) is opt-out. `shortcut: "false"` (quoted string) is a shortcut literally named `false` and will register `/false`.
+
+**Known limitations:**
+
+Modes whose `name` matches a built-in CLI command (`help`, `mode`, `modes`, `exit`, `quit`) will register a default `/<name>` alias that is silently overridden by the CLI's built-in command dispatch. These modes remain activatable via `/mode <name>`. To give such a mode a working slash alias, set `shortcut:` explicitly to a non-reserved value (e.g., `shortcut: my-help`).
+
+**Third-party bundle naming guidance:**
+
+Bundle-shipped modes should use descriptive, unique names (e.g. `systems-design` rather than `design`, `perf-audit` rather than `perf`). First-load wins silently on shortcut collision; the second bundle's shortcut is dropped with an INFO log in `get_shortcuts()`.
+
 ## For You (The Agent)
 
 When you see `<system-reminder source="mode-<name>">` in your context:
