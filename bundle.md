@@ -21,7 +21,7 @@ Provides a generic mode system for Amplifier. Modes are runtime behavior overlay
 
 ```
 /mode plan       # Enable plan mode
-/mode review     # Switch to review mode  
+/mode careful    # Switch to careful mode
 /mode off        # Disable current mode
 /modes           # List available modes
 ```
@@ -41,7 +41,7 @@ Create a `.md` file in `.amplifier/modes/` or `~/.amplifier/modes/`:
 mode:
   name: mymode
   description: My custom mode
-  shortcut: mymode
+  shortcut: mymode   # Optional; defaults to `name`. Use `shortcut: false` to disable.
   
   tools:
     safe: [read_file, grep]
