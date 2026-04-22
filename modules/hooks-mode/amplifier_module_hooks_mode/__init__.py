@@ -99,10 +99,18 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
     mode_config = parsed["mode"]
     tools_config = mode_config.get("tools", {})
 
+    resolved_name = mode_config.get("name", file_path.stem)
+
+    if "shortcut" in mode_config:
+        # (opt-out, bool-guard, string paths — added incrementally in T3/T4)
+        shortcut = mode_config["shortcut"]
+    else:
+        shortcut = resolved_name
+
     return ModeDefinition(
-        name=mode_config.get("name", file_path.stem),
+        name=resolved_name,
         description=mode_config.get("description", ""),
-        shortcut=mode_config.get("shortcut"),
+        shortcut=shortcut,
         context=markdown_body,
         safe_tools=tools_config.get("safe", []),
         warn_tools=tools_config.get("warn", []),
