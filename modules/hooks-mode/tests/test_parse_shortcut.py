@@ -192,3 +192,32 @@ class TestShortcutYamlBooleanTrap:
             mode_def = parse_mode_file(f)
         assert mode_def.shortcut == "alpha"  # type: ignore[union-attr]  # §9.1 case 12c
         assert any("YAML boolean" in r.message for r in caplog.records)
+
+
+class TestShortcutLowercase:
+    def test_explicit_mixed_case_lowercased(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: m
+              shortcut: MyMode
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut == "mymode"  # type: ignore[union-attr]  # §9.1 case 14
+
+    def test_name_mixed_case_lowercased_in_default(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: MyMode
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut == "mymode"  # type: ignore[union-attr]  # §9.1 case 13
