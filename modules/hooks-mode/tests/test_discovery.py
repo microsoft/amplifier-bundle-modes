@@ -555,6 +555,51 @@ class TestGetShortcutsCollision:
             disc.get_shortcuts()
         assert any("collision" in r.message.lower() for r in caplog.records)
 
+    def test_get_shortcuts_preserves_cache_precedence(self, tmp_path):
+        """After get_shortcuts(), find() must return the highest-precedence mode_def.
+
+        Regression test for the cache last-wins bug introduced in commit 94b3c20:
+        get_shortcuts() was unconditionally writing self._cache[name] = mode_def for
+        every file it parsed, so the last bundle wins in the cache even though the
+        shortcuts dict itself correctly applied first-wins.  After the one-line fix
+        (``if name not in self._cache``), find("review") must return bundle-A's mode_def.
+        """
+        from textwrap import dedent
+
+        path_a = tmp_path / "a" / "modes"
+        path_a.mkdir(parents=True)
+        path_b = tmp_path / "b" / "modes"
+        path_b.mkdir(parents=True)
+        # Same stem + same YAML name, different descriptions so we can tell them apart.
+        (path_a / "review.md").write_text(
+            dedent("""\
+                ---
+                mode:
+                  name: review
+                  description: from bundle A
+                ---
+                """)
+        )
+        (path_b / "review.md").write_text(
+            dedent("""\
+                ---
+                mode:
+                  name: review
+                  description: from bundle B
+                ---
+                """)
+        )
+        disc = ModeDiscovery(search_paths=[(path_a, "a"), (path_b, "b")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.get_capability.return_value = None
+        disc.get_shortcuts()  # triggers the cache writes
+        result = disc.find("review")
+        assert result is not None
+        assert result.description == "from bundle A", (
+            f"Expected bundle-A mode_def but got description={result.description!r}. "
+            "Cache precedence not preserved — last-wins bug still present."
+        )
+
     def test_invalid_shortcut_excluded_from_get_shortcuts(self, tmp_path):
         """§9.2 case 6 direct: a mode with an invalid shortcut is absent from get_shortcuts output."""
         from textwrap import dedent

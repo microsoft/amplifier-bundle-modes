@@ -415,11 +415,12 @@ class ModeDiscovery:
                 name = mode_file.stem
                 # Always freshly parse each file so collision detection can compare
                 # mode_def.name values across search paths (same-stem files in different
-                # bundles may have different YAML name: fields).  Still update the cache
-                # so find() callers benefit from the parsed result.
+                # bundles may have different YAML name: fields).  Cache is updated with
+                # first-wins semantics so find() callers see the highest-precedence mode_def.
                 mode_def = parse_mode_file(mode_file)
                 if mode_def:
-                    self._cache[name] = mode_def
+                    if name not in self._cache:  # preserve first-wins cache precedence
+                        self._cache[name] = mode_def
                     if mode_def.shortcut:
                         if mode_def.shortcut in shortcuts:
                             existing_name = shortcuts[mode_def.shortcut]
