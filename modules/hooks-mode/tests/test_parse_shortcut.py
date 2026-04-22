@@ -7,7 +7,19 @@ explicit regression (T7), and shipped-modes lock (T17).
 
 from __future__ import annotations
 
+import textwrap
+from pathlib import Path
+
 from amplifier_module_hooks_mode import _SHORTCUT_PATTERN, _is_valid_shortcut  # type: ignore[attr-defined]
+from amplifier_module_hooks_mode import parse_mode_file
+
+
+def _write_mode(
+    tmp_path: Path, filename: str, frontmatter_body: str, markdown: str = "body"
+) -> Path:
+    p = tmp_path / filename
+    p.write_text(f"---\n{frontmatter_body}\n---\n{markdown}\n", encoding="utf-8")
+    return p
 
 
 class TestShortcutValidator:
@@ -35,3 +47,36 @@ class TestShortcutValidator:
 
     def test_rejects_empty(self):
         assert _is_valid_shortcut("") is False
+
+
+class TestShortcutDefaultFromName:
+    def test_key_omitted_defaults_to_name(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "explore.md",
+            textwrap.dedent("""
+            mode:
+              name: explore
+              description: d
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        mode_def = parse_mode_file(f)
+        assert mode_def is not None
+        assert mode_def.shortcut == "explore"  # §9.1 case 3
+
+    def test_key_omitted_and_name_omitted_defaults_to_stem(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "foo.md",
+            textwrap.dedent("""
+            mode:
+              description: d
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        mode_def = parse_mode_file(f)
+        assert mode_def is not None
+        assert mode_def.shortcut == "foo"  # §9.1 case 10
