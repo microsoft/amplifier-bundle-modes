@@ -344,3 +344,46 @@ class TestShortcutExplicitRegressions:
         # Distinguished from `shortcut: false` (unquoted) which is the opt-out.
         # Design §5.2 Note; §9.1 case 11.
         assert parse_mode_file(f).shortcut == "false"  # type: ignore[union-attr]
+
+
+class TestIntegrationFakeBundle:
+    def test_fake_bundle_layout(self, tmp_path):
+        """§9.3 integration: three modes — omitted / opt-out / explicit."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hooks_mode import ModeDiscovery
+
+        modes = tmp_path / "fake-bundle" / "modes"
+        modes.mkdir(parents=True)
+        (modes / "alpha.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: alpha, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        (modes / "beta.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: beta, shortcut: false, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        (modes / "gamma.md").write_text(
+            textwrap.dedent("""
+                ---
+                mode: {name: gamma, shortcut: g, tools: {safe: []}, default_action: block}
+                ---
+                body
+            """).strip()
+            + "\n"
+        )
+        disc = ModeDiscovery(search_paths=[(modes, "test")])
+        disc._coordinator = MagicMock()
+        disc._coordinator.get_capability.return_value = None
+        result = disc.get_shortcuts()
+        assert result == {"alpha": "alpha", "g": "gamma"}  # no `beta` key
