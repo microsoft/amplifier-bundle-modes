@@ -55,12 +55,12 @@ class ModeDefinition:
 def parse_mode_file(file_path: Path) -> ModeDefinition | None:
     """Parse a mode definition from a markdown file with YAML frontmatter.
 
-    Expected format:
+    Expected format (shortcut is optional; shown here with an explicit value):
     ---
     mode:
       name: plan
       description: Think and discuss
-      shortcut: plan
+      shortcut: plan    # Optional — defaults to the mode's name (lowercased) when omitted
       tools:
         safe: [read_file, grep]
         warn: [bash]
@@ -70,6 +70,28 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
     # Mode Context
 
     This markdown content is injected when the mode is active...
+
+    Shortcut resolution semantics:
+
+    - If ``shortcut:`` is **absent**, the shortcut defaults to the resolved ``name``
+      (or the filename stem when ``name`` is also absent).
+    - If ``shortcut: false`` (YAML boolean), the shortcut is explicitly disabled;
+      the mode remains activatable via ``/mode <name>``.
+    - ``shortcut: "false"`` (quoted string) is a real shortcut named ``false``,
+      distinct from the boolean opt-out.
+    - Shortcuts are lowercase-normalized at parse time and validated against
+      ``^[a-z][a-z0-9_-]*$``; invalid values log a WARNING and are dropped
+      (the mode still loads and is activatable via ``/mode <name>``).
+
+    Example with opt-out:
+    ---
+    mode:
+      name: internal-only
+      shortcut: false    # no /<name> alias registered; use /mode internal-only
+      tools:
+        safe: []
+      default_action: block
+    ---
     """
     try:
         content = file_path.read_text(encoding="utf-8")
