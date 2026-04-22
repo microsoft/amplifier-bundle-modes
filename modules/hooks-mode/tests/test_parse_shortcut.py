@@ -297,3 +297,50 @@ class TestShortcutValidation:
         assert any(
             "not a valid slash-command identifier" in r.message for r in caplog.records
         )
+
+
+class TestShortcutExplicitRegressions:
+    def test_explicit_matches_name(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: plan
+              shortcut: plan
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut == "plan"  # type: ignore[union-attr]  # §9.1 case 1
+
+    def test_explicit_differs_from_name(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: plan
+              shortcut: p
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        assert parse_mode_file(f).shortcut == "p"  # type: ignore[union-attr]  # §9.1 case 2
+
+    def test_quoted_false_is_literal_shortcut_named_false(self, tmp_path):
+        f = _write_mode(
+            tmp_path,
+            "m.md",
+            textwrap.dedent("""
+            mode:
+              name: m
+              shortcut: "false"
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        # YAML string "false" (quoted) is a real string, not a boolean → registers /false.
+        # Distinguished from `shortcut: false` (unquoted) which is the opt-out.
+        # Design §5.2 Note; §9.1 case 11.
+        assert parse_mode_file(f).shortcut == "false"  # type: ignore[union-attr]
