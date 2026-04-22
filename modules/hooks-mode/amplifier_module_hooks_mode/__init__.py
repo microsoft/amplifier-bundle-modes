@@ -105,6 +105,16 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
         raw = mode_config["shortcut"]
         if raw is False or raw is None or raw == "" or raw == 0:
             shortcut = None
+        elif isinstance(raw, bool):  # True — YAML truthy trap (yes/true/on)
+            logger.warning(
+                "Mode file %s: shortcut value %r is a YAML boolean, not a string. "
+                "To disable the shortcut, use `shortcut: false`. "
+                "To use the default (the mode's name), omit the field. "
+                "Treating as absent for this load.",
+                file_path,
+                raw,
+            )
+            shortcut = resolved_name
         else:
             shortcut = str(raw).strip() or None
     else:

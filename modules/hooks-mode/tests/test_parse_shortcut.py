@@ -7,6 +7,7 @@ explicit regression (T7), and shipped-modes lock (T17).
 
 from __future__ import annotations
 
+import logging
 import textwrap
 from pathlib import Path
 
@@ -138,3 +139,56 @@ class TestShortcutOptOut:
         """).strip(),
         )
         assert parse_mode_file(f).shortcut is None  # type: ignore[union-attr]  # §7.5
+
+
+class TestShortcutYamlBooleanTrap:
+    def test_yaml_yes_warns_and_defaults(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "alpha.md",
+            textwrap.dedent("""
+            mode:
+              name: alpha
+              shortcut: yes
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def.shortcut == "alpha"  # type: ignore[union-attr]  # §9.1 case 12a — defaults from name
+        assert any("YAML boolean" in r.message for r in caplog.records)
+
+    def test_yaml_true_warns_and_defaults(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "alpha.md",
+            textwrap.dedent("""
+            mode:
+              name: alpha
+              shortcut: true
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def.shortcut == "alpha"  # type: ignore[union-attr]  # §9.1 case 12b
+        assert any("YAML boolean" in r.message for r in caplog.records)
+
+    def test_yaml_on_warns_and_defaults(self, tmp_path, caplog):
+        f = _write_mode(
+            tmp_path,
+            "alpha.md",
+            textwrap.dedent("""
+            mode:
+              name: alpha
+              shortcut: on
+              tools: {safe: []}
+              default_action: block
+        """).strip(),
+        )
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
+            mode_def = parse_mode_file(f)
+        assert mode_def.shortcut == "alpha"  # type: ignore[union-attr]  # §9.1 case 12c
+        assert any("YAML boolean" in r.message for r in caplog.records)
