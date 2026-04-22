@@ -446,8 +446,7 @@ class TestGetShortcutsNameAsValue:
         )
         disc = ModeDiscovery(search_paths=[(modes_dir, "test")])
         disc._coordinator = MagicMock()
-        disc._coordinator.capabilities = MagicMock()
-        disc._coordinator.capabilities.get.return_value = None
+        disc._coordinator.get_capability.return_value = None
         result = disc.get_shortcuts()
         # Key = shortcut (defaults to name, lowercased) = "my-mode"
         # Value = mode_def.name = "my-mode" (NOT "my_mode" stem)
