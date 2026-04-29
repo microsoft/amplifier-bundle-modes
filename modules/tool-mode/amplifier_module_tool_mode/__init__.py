@@ -9,6 +9,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .events import (
+    ALL_EVENTS,
+    MODE_ACTIVATED,
+    MODE_ACTIVATION_GATED,
+    MODE_CHANGED,
+    MODE_CLEARED,
+    MODE_TRANSITION_DENIED,
+)
+
 logger = logging.getLogger(__name__)
 
 __amplifier_module_type__ = "tool"
@@ -53,6 +62,15 @@ class ModeTool:
         auto    - Agent changes freely
         warn    - First call denied with reminder; retry proceeds
         confirm - Requires user approval via hooks-approval
+
+    Event emission pattern follows the delegate tool convention
+    (amplifier-foundation/modules/tool-delegate): bare ``await hooks.emit(...)``
+    with no per-emit try/except. A single outer try/except per handler method
+    catches unexpected failures (including rare bridge/serialization errors) and
+    returns a clean ToolResult rather than letting exceptions escape to the LLM.
+    This is distinct from hook handlers (hooks-mode) which use per-emit try/except
+    to guarantee HookResult delivery to the kernel even when emit fails —
+    fail-open observability, fail-closed security.
     """
 
     name = "mode"
@@ -205,32 +223,84 @@ class ModeTool:
                 },
             )
 
-        # Check allowed_transitions from current mode (if any)
-        current_mode_name = self.coordinator.session_state.get("active_mode")
-        if current_mode_name:
-            current_mode_def = discovery.find(current_mode_name) if discovery else None
-            if (
-                current_mode_def
-                and current_mode_def.allowed_transitions is not None
-                and name not in current_mode_def.allowed_transitions
-            ):
-                allowed = ", ".join(current_mode_def.allowed_transitions) or "(none)"
-                return ToolResult(
-                    success=False,
-                    error={
-                        "code": "transition_denied",
-                        "message": (
-                            f"Transition from '{current_mode_name}' to '{name}' is not allowed. "
-                            f"Allowed transitions: {allowed}."
-                        ),
+        # Outer try/except (delegate tool pattern): catches any unexpected failure
+        # including rare bridge/serialization errors from hooks.emit(). Individual
+        # emits are bare awaits — no per-emit wrapping.
+        try:
+            # Check allowed_transitions from current mode (if any)
+            current_mode_name = self.coordinator.session_state.get("active_mode")
+            if current_mode_name:
+                current_mode_def = (
+                    discovery.find(current_mode_name) if discovery else None
+                )
+                if (
+                    current_mode_def
+                    and current_mode_def.allowed_transitions is not None
+                    and name not in current_mode_def.allowed_transitions
+                ):
+                    allowed = (
+                        ", ".join(current_mode_def.allowed_transitions) or "(none)"
+                    )
+                    await self.coordinator.hooks.emit(
+                        MODE_TRANSITION_DENIED,
+                        {
+                            "from_mode": current_mode_name,
+                            "to_mode": name,
+                            "allowed_transitions": list(
+                                current_mode_def.allowed_transitions
+                            ),
+                        },
+                    )
+                    return ToolResult(
+                        success=False,
+                        error={
+                            "code": "transition_denied",
+                            "message": (
+                                f"Transition from '{current_mode_name}' to '{name}' is not allowed. "
+                                f"Allowed transitions: {allowed}."
+                            ),
+                        },
+                    )
+
+            # Apply gate policy
+            if self.gate_policy == "warn":
+                warn_key = f"set:{name}"
+                if warn_key not in self._warned_transitions:
+                    self._warned_transitions.add(warn_key)
+                    await self.coordinator.hooks.emit(
+                        MODE_ACTIVATION_GATED,
+                        {
+                            "gate_policy": self.gate_policy,
+                            "target_mode": name,
+                            "description": mode_def.description,
+                            "from_mode": self.coordinator.session_state.get(
+                                "active_mode"
+                            ),
+                        },
+                    )
+                    return ToolResult(
+                        success=False,
+                        output={
+                            "status": "denied",
+                            "denied_mode": name,
+                            "user_instruction": (
+                                f"Inform the user: I'd like to switch to '{name}' mode "
+                                f"({mode_def.description}). You can switch manually with "
+                                f"/mode {name} or I can retry to proceed."
+                            ),
+                        },
+                    )
+
+            elif self.gate_policy == "confirm":
+                await self.coordinator.hooks.emit(
+                    MODE_ACTIVATION_GATED,
+                    {
+                        "gate_policy": self.gate_policy,
+                        "target_mode": name,
+                        "description": mode_def.description,
+                        "from_mode": self.coordinator.session_state.get("active_mode"),
                     },
                 )
-
-        # Apply gate policy
-        if self.gate_policy == "warn":
-            warn_key = f"set:{name}"
-            if warn_key not in self._warned_transitions:
-                self._warned_transitions.add(warn_key)
                 return ToolResult(
                     success=False,
                     output={
@@ -239,37 +309,73 @@ class ModeTool:
                         "user_instruction": (
                             f"Inform the user: I'd like to switch to '{name}' mode "
                             f"({mode_def.description}). You can switch manually with "
-                            f"/mode {name} or I can retry to proceed."
+                            f"/mode {name} or grant permission for me to manage "
+                            f"mode transitions."
                         ),
                     },
                 )
 
-        elif self.gate_policy == "confirm":
+            # Gate passed (auto, or warn retry) - activate the mode
+            return await self._activate_mode(name, mode_def)
+
+        except Exception:
+            logger.error("_handle_set failed unexpectedly", exc_info=True)
             return ToolResult(
                 success=False,
-                output={
-                    "status": "denied",
-                    "denied_mode": name,
-                    "user_instruction": (
-                        f"Inform the user: I'd like to switch to '{name}' mode "
-                        f"({mode_def.description}). You can switch manually with "
-                        f"/mode {name} or grant permission for me to manage "
-                        f"mode transitions."
-                    ),
+                error={
+                    "code": "internal_error",
+                    "message": "An unexpected error occurred during mode set.",
                 },
             )
 
-        # Gate passed (auto, or warn retry) - activate the mode
-        return self._activate_mode(name, mode_def)
+    async def _activate_mode(self, name: str, mode_def: Any) -> ToolResult:
+        """Activate a mode: emit event, update session state, reset warnings, return info.
 
-    def _activate_mode(self, name: str, mode_def: Any) -> ToolResult:
-        """Activate a mode: update session state, reset warnings, return info."""
+        Emit-before-state-change pattern (matching delegate tool): the event fires
+        before session state is mutated. If the emit raises unexpectedly, the caller's
+        outer try/except returns a failure and state is never changed — keeping the
+        observable state and the ToolResult consistent.
+        """
+        # Capture previous mode BEFORE any state write
+        previous_mode = self.coordinator.session_state.get("active_mode")
+
+        # Build payload before state change
+        if previous_mode is None:
+            event = MODE_ACTIVATED
+            payload: dict[str, Any] = {
+                "mode": name,
+                "description": mode_def.description,
+                "default_action": mode_def.default_action,
+                "safe_tools": mode_def.safe_tools,
+                "warn_tools": mode_def.warn_tools,
+                "confirm_tools": mode_def.confirm_tools,
+                "block_tools": mode_def.block_tools,
+            }
+        else:
+            event = MODE_CHANGED
+            payload = {
+                "from_mode": previous_mode,
+                "to_mode": name,
+                "description": mode_def.description,
+                "default_action": mode_def.default_action,
+                "safe_tools": mode_def.safe_tools,
+                "warn_tools": mode_def.warn_tools,
+                "confirm_tools": mode_def.confirm_tools,
+                "block_tools": mode_def.block_tools,
+            }
+
+        # Emit FIRST (before state change) — bare await, delegate tool pattern.
+        # If this raises, the caller's outer try/except handles it and state is
+        # never mutated, keeping observable state consistent with the return value.
+        await self.coordinator.hooks.emit(event, payload)
+
+        # Apply state changes only after emit succeeds
         self.coordinator.session_state["active_mode"] = name
-
-        # Reset tool warnings for the new mode
         hooks = self._get_hooks()
         if hooks:
             hooks.reset_warnings()
+
+        logger.info("Mode activated: %s (gate_policy=%s)", name, self.gate_policy)
 
         # Build restricted tools summary
         restricted: dict[str, list[str]] = {}
@@ -279,8 +385,6 @@ class ModeTool:
             restricted["confirm"] = mode_def.confirm_tools
         if mode_def.block_tools:
             restricted["block"] = mode_def.block_tools
-
-        logger.info("Mode activated: %s (gate_policy=%s)", name, self.gate_policy)
 
         return ToolResult(
             success=True,
@@ -299,31 +403,85 @@ class ModeTool:
         """Deactivate the current mode (subject to allow_clear and gate policy)."""
         current_mode_name = self.coordinator.session_state.get("active_mode")
 
-        # Check allow_clear from current mode (if any)
-        if current_mode_name:
-            discovery = self._get_discovery()
-            current_mode_def = discovery.find(current_mode_name) if discovery else None
-            if current_mode_def and not current_mode_def.allow_clear:
-                allowed = ""
-                if current_mode_def.allowed_transitions:
-                    allowed = ", ".join(current_mode_def.allowed_transitions)
-                return ToolResult(
-                    success=False,
-                    error={
-                        "code": "clear_denied",
-                        "message": (
-                            f"Cannot clear mode while in '{current_mode_name}'. "
-                            f"Transition to a valid next mode instead."
-                            + (f" Allowed transitions: {allowed}." if allowed else "")
-                        ),
+        # Outer try/except (delegate tool pattern): catches any unexpected failure
+        # including rare bridge/serialization errors from hooks.emit(). Individual
+        # emits are bare awaits — no per-emit wrapping.
+        try:
+            # Check allow_clear from current mode (if any)
+            if current_mode_name:
+                discovery = self._get_discovery()
+                current_mode_def = (
+                    discovery.find(current_mode_name) if discovery else None
+                )
+                if current_mode_def and not current_mode_def.allow_clear:
+                    allowed = ""
+                    if current_mode_def.allowed_transitions:
+                        allowed = ", ".join(current_mode_def.allowed_transitions)
+                    await self.coordinator.hooks.emit(
+                        MODE_TRANSITION_DENIED,
+                        {
+                            "from_mode": current_mode_name,
+                            "to_mode": None,
+                            "allowed_transitions": list(
+                                current_mode_def.allowed_transitions or []
+                            ),
+                        },
+                    )
+                    return ToolResult(
+                        success=False,
+                        error={
+                            "code": "clear_denied",
+                            "message": (
+                                f"Cannot clear mode while in '{current_mode_name}'. "
+                                f"Transition to a valid next mode instead."
+                                + (
+                                    f" Allowed transitions: {allowed}."
+                                    if allowed
+                                    else ""
+                                )
+                            ),
+                        },
+                    )
+
+            # Apply gate policy (same as _handle_set)
+            if self.gate_policy == "warn":
+                warn_key = "clear"
+                if warn_key not in self._warned_transitions:
+                    self._warned_transitions.add(warn_key)
+                    await self.coordinator.hooks.emit(
+                        MODE_ACTIVATION_GATED,
+                        {
+                            "gate_policy": self.gate_policy,
+                            "target_mode": None,
+                            "from_mode": current_mode_name,
+                        },
+                    )
+                    return ToolResult(
+                        success=False,
+                        output={
+                            "status": "denied",
+                            "user_instruction": (
+                                "Inform the user: I'd like to clear the current mode"
+                                + (
+                                    f" ('{current_mode_name}')"
+                                    if current_mode_name
+                                    else ""
+                                )
+                                + " and remove all tool restrictions. "
+                                "You can clear manually with /mode off or I can retry to proceed."
+                            ),
+                        },
+                    )
+
+            elif self.gate_policy == "confirm":
+                await self.coordinator.hooks.emit(
+                    MODE_ACTIVATION_GATED,
+                    {
+                        "gate_policy": self.gate_policy,
+                        "target_mode": None,
+                        "from_mode": current_mode_name,
                     },
                 )
-
-        # Apply gate policy (same as _handle_set)
-        if self.gate_policy == "warn":
-            warn_key = "clear"
-            if warn_key not in self._warned_transitions:
-                self._warned_transitions.add(warn_key)
                 return ToolResult(
                     success=False,
                     output={
@@ -332,48 +490,49 @@ class ModeTool:
                             "Inform the user: I'd like to clear the current mode"
                             + (f" ('{current_mode_name}')" if current_mode_name else "")
                             + " and remove all tool restrictions. "
-                            "You can clear manually with /mode off or I can retry to proceed."
+                            "You can clear manually with /mode off or grant permission "
+                            "for me to manage mode transitions."
                         ),
                     },
                 )
 
-        elif self.gate_policy == "confirm":
+            # Gate passed — emit FIRST (before state change), delegate tool pattern.
+            # If this raises, the caller's outer try/except handles it and state is
+            # never mutated, keeping observable state consistent with the return value.
+            if current_mode_name is not None:
+                await self.coordinator.hooks.emit(
+                    MODE_CLEARED, {"previous_mode": current_mode_name}
+                )
+
+            # Apply state changes only after emit succeeds
+            previous = current_mode_name
+            self.coordinator.session_state["active_mode"] = None
+            hooks = self._get_hooks()
+            if hooks:
+                hooks.reset_warnings()
+            # Reset gate warning memory so next set requires fresh confirmation
+            self._warned_transitions.clear()
+
+            logger.info("Mode cleared (was: %s)", previous)
+
             return ToolResult(
-                success=False,
+                success=True,
                 output={
-                    "status": "denied",
-                    "user_instruction": (
-                        "Inform the user: I'd like to clear the current mode"
-                        + (f" ('{current_mode_name}')" if current_mode_name else "")
-                        + " and remove all tool restrictions. "
-                        "You can clear manually with /mode off or grant permission "
-                        "for me to manage mode transitions."
-                    ),
+                    "status": "cleared",
+                    "previous_mode": previous,
+                    "message": "Mode deactivated. All tools are now unrestricted.",
                 },
             )
 
-        # Gate passed (auto, or warn retry) - perform the clear
-        previous = current_mode_name
-        self.coordinator.session_state["active_mode"] = None
-
-        # Reset tool warnings
-        hooks = self._get_hooks()
-        if hooks:
-            hooks.reset_warnings()
-
-        # Reset gate warning memory so next set requires fresh confirmation
-        self._warned_transitions.clear()
-
-        logger.info("Mode cleared (was: %s)", previous)
-
-        return ToolResult(
-            success=True,
-            output={
-                "status": "cleared",
-                "previous_mode": previous,
-                "message": "Mode deactivated. All tools are now unrestricted.",
-            },
-        )
+        except Exception:
+            logger.error("_handle_clear failed unexpectedly", exc_info=True)
+            return ToolResult(
+                success=False,
+                error={
+                    "code": "internal_error",
+                    "message": "An unexpected error occurred during mode clear.",
+                },
+            )
 
 
 async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
@@ -394,3 +553,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
 
     tool = ModeTool(config=config, coordinator=coordinator)
     await coordinator.mount("tools", tool, name=tool.name)
+    # Contribute event catalogue to observability.events channel
+    coordinator.register_contributor(
+        "observability.events", "bundle-modes:tool-mode", lambda: ALL_EVENTS
+    )
