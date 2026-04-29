@@ -1,0 +1,84 @@
+// mode-events-taxonomy.dot
+//
+// Ownership and trigger relationships between kernel hooks and mode events.
+//
+// How to read this diagram (left to right):
+//   1. Kernel hooks (left cluster) receive signals from the kernel bus.
+//   2. Each kernel hook triggers one or more mode events (centre clusters)
+//      under the labelled condition.
+//   3. Both modules independently contribute their event catalogues to the
+//      observability.events channel (right) for consumer discovery.
+//
+// Trigger edges (solid arrows) show which kernel hook fires which event and
+// under what condition.
+//
+// Contribution edges (dashed arrows, coloured by module) show which module's
+// events feed the shared observability.events contribution channel.
+//
+// DOT source only — no rendered SVG or PNG is checked in.
+
+digraph mode_events_taxonomy {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fillcolor="#f5f5f5", fontname="Helvetica"];
+
+    // ─── Kernel hooks ───────────────────────────────────────────────────────
+    subgraph cluster_kernel {
+        label="Kernel hooks";
+        style=dashed;
+        color=gray;
+
+        provider_request [fillcolor="#dde7f4"];
+        tool_pre         [fillcolor="#dde7f4"];
+        tool_set         [label="mode(set / clear)\n(tool invocation)", fillcolor="#dde7f4"];
+    }
+
+    // ─── modules/hooks-mode/ ────────────────────────────────────────────────
+    subgraph cluster_hooks_mode {
+        label="modules/hooks-mode/";
+        style=filled;
+        fillcolor="#fff8dc";
+
+        ev_context [label="mode:context_injected", fillcolor="#fff1b8"];
+        ev_blocked [label="mode:tool_blocked",     fillcolor="#fff1b8"];
+        ev_warned  [label="mode:tool_warned",      fillcolor="#fff1b8"];
+    }
+
+    // ─── modules/tool-mode/ ─────────────────────────────────────────────────
+    subgraph cluster_tool_mode {
+        label="modules/tool-mode/";
+        style=filled;
+        fillcolor="#e6ffe6";
+
+        ev_activated    [label="mode:activated",         fillcolor="#c8f0c8"];
+        ev_changed      [label="mode:changed",           fillcolor="#c8f0c8"];
+        ev_cleared      [label="mode:cleared",           fillcolor="#c8f0c8"];
+        ev_trans_denied [label="mode:transition_denied", fillcolor="#c8f0c8"];
+        ev_act_gated    [label="mode:activation_gated",  fillcolor="#c8f0c8"];
+    }
+
+    // ─── Shared output node ─────────────────────────────────────────────────
+    obs_channel [label="observability.events\n(contribution channel)",
+                 shape=cylinder, fillcolor="#fde0e0"];
+
+    // ─── Trigger edges (solid) ───────────────────────────────────────────────
+    provider_request -> ev_context      [label="hash changed"];
+    tool_pre         -> ev_blocked      [label="block_list /\ndefault_action"];
+    tool_pre         -> ev_warned       [label="first warn"];
+    tool_set         -> ev_activated    [label="off -> on"];
+    tool_set         -> ev_changed      [label="on -> on"];
+    tool_set         -> ev_cleared      [label="clear"];
+    tool_set         -> ev_trans_denied [label="allowed_transitions"];
+    tool_set         -> ev_act_gated    [label="warn / confirm gate"];
+
+    // ─── Contribution edges (dashed) — hooks-mode events ────────────────────
+    ev_context -> obs_channel [style=dashed, color="#cc6666", label="contributes"];
+    ev_blocked -> obs_channel [style=dashed, color="#cc6666"];
+    ev_warned  -> obs_channel [style=dashed, color="#cc6666"];
+
+    // ─── Contribution edges (dashed) — tool-mode events ─────────────────────
+    ev_activated    -> obs_channel [style=dashed, color="#669966", label="contributes"];
+    ev_changed      -> obs_channel [style=dashed, color="#669966"];
+    ev_cleared      -> obs_channel [style=dashed, color="#669966"];
+    ev_trans_denied -> obs_channel [style=dashed, color="#669966"];
+    ev_act_gated    -> obs_channel [style=dashed, color="#669966"];
+}

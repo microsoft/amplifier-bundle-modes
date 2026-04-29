@@ -46,12 +46,15 @@ def _create_mode_file(
 
 def _make_coordinator(active_mode: str | None = None) -> MagicMock:
     """Create a mock coordinator with session_state."""
+    from unittest.mock import AsyncMock
+
     coordinator = MagicMock()
     coordinator.session_state = {
         "active_mode": active_mode,
         "require_approval_tools": set(),
     }
     coordinator.hooks = MagicMock()
+    coordinator.hooks.emit = AsyncMock()
     coordinator.get_capability = MagicMock(return_value=None)
     return coordinator
 

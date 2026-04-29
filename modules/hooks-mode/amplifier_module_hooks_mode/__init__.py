@@ -12,6 +12,7 @@ custom modes without writing any Python code.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -22,6 +23,13 @@ import yaml
 
 if TYPE_CHECKING:
     from amplifier_core.models import HookResult
+
+from .events import (  # noqa: F401
+    ALL_EVENTS,
+    MODE_CONTEXT_INJECTED,
+    MODE_TOOL_BLOCKED,
+    MODE_TOOL_WARNED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +463,7 @@ class ModeHooks:
         self.coordinator = coordinator
         self.discovery = discovery
         self.warned_tools: set[str] = set()
+        self._last_context_hash: str | None = None
         self.infrastructure_tools: set[str] = (
             infrastructure_tools
             if infrastructure_tools is not None
@@ -537,6 +546,37 @@ class ModeHooks:
         # Resolve any @namespace:path mentions in the mode body before injection
         resolved_context = self._resolve_mentions(mode.context)
 
+        # Emit mode:context_injected only when the context has changed (hash-gated)
+        content_hash = hashlib.sha256(resolved_context.encode()).hexdigest()
+        if content_hash != self._last_context_hash:
+            self._last_context_hash = content_hash
+            # Nested emit is safe: the inner event (mode:context_injected) is a
+            # different event name from the enclosing event (provider:request). No
+            # handlers registered by this module listen on mode:context_injected,
+            # so there is no recursive dispatch path. The inner emit runs to
+            # completion (all its handlers awaited sequentially) before returning here.
+            #
+            # Fail-open observability: if emit raises (rare bridge/serialization
+            # error), log a warning and continue — context injection still proceeds.
+            # The HookResult (inject_context) is computed below regardless of emit
+            # outcome, matching the per-emit protection pattern in this module.
+            try:
+                await self.coordinator.hooks.emit(
+                    MODE_CONTEXT_INJECTED,
+                    {
+                        "mode": mode.name,
+                        "context_length": len(resolved_context),
+                        "content_hash": content_hash,
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "mode:context_injected emit failed for mode '%s'; "
+                    "context injection continues",
+                    mode.name,
+                    exc_info=True,
+                )
+
         # Wrap context in system-reminder tags with explicit MODE ACTIVE banner
         context_block = (
             f'<system-reminder source="mode-{mode.name}">\n'
@@ -573,44 +613,111 @@ class ModeHooks:
         if tool_name in mode.safe_tools:
             return HookResult(action="continue")
 
-        # Explicitly blocked tools: always deny
+        # Explicitly blocked tools: always deny.
+        # Compute result first; emit observability event with fail-open protection.
+        # If emit raises, log the warning and return the deny result anyway —
+        # fail-open observability, fail-closed security.
         if tool_name in mode.block_tools:
-            return HookResult(
+            result = HookResult(
                 action="deny",
                 reason=f"Mode '{mode.name}': '{tool_name}' is blocked. {mode.description}",
             )
+            try:
+                await self.coordinator.hooks.emit(
+                    MODE_TOOL_BLOCKED,
+                    {"tool_name": tool_name, "mode": mode.name, "reason": "block_list"},
+                )
+            except Exception:
+                logger.warning(
+                    "mode:tool_blocked emit failed for tool '%s'; deny result returned anyway",
+                    tool_name,
+                    exc_info=True,
+                )
+            return result
 
         # Confirm tools: let approval hook handle it
         # (mode_confirm_tools is already set in session state by _get_active_mode)
         if tool_name in mode.confirm_tools:
             return HookResult(action="continue")
 
-        # Warn-first tools: warn once, then allow
+        # Warn-first tools: warn once, then allow.
+        # Emitted twice per tool: is_first_warning=True (denied) then is_first_warning=False
+        # (allowed) so observers can distinguish "warned and denied" from "warned then allowed."
+        # Both emits use fail-open protection — result is returned regardless of emit outcome.
         if tool_name in mode.warn_tools:
             warn_key = f"{mode.name}:{tool_name}"
             if warn_key not in self.warned_tools:
                 self.warned_tools.add(warn_key)
-                return HookResult(
+                result = HookResult(
                     action="deny",
                     reason=f"Mode '{mode.name}': '{tool_name}' requires confirmation. "
                     f"Call again if this is appropriate for {mode.name} mode.",
                 )
-            return HookResult(action="continue")
+                try:
+                    await self.coordinator.hooks.emit(
+                        MODE_TOOL_WARNED,
+                        {
+                            "tool_name": tool_name,
+                            "mode": mode.name,
+                            "is_first_warning": True,
+                        },
+                    )
+                except Exception:
+                    logger.warning(
+                        "mode:tool_warned emit failed for tool '%s' (first warning); "
+                        "deny result returned anyway",
+                        tool_name,
+                        exc_info=True,
+                    )
+                return result
+            # Second+ call: tool has been warned and acknowledged; now allowed.
+            result = HookResult(action="continue")
+            try:
+                await self.coordinator.hooks.emit(
+                    MODE_TOOL_WARNED,
+                    {
+                        "tool_name": tool_name,
+                        "mode": mode.name,
+                        "is_first_warning": False,
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "mode:tool_warned emit failed for tool '%s' (allow); "
+                    "allow result returned anyway",
+                    tool_name,
+                    exc_info=True,
+                )
+            return result
 
         # Default action for unlisted tools
         if mode.default_action == "allow":
             return HookResult(action="continue")
 
-        # Default is block
-        return HookResult(
+        # Default is block — same fail-open protection as explicit block list above.
+        result = HookResult(
             action="deny",
             reason=f"Mode '{mode.name}': '{tool_name}' is not in the allowed list. "
             f"Use /mode off to exit {mode.name} mode.",
         )
+        try:
+            await self.coordinator.hooks.emit(
+                MODE_TOOL_BLOCKED,
+                {"tool_name": tool_name, "mode": mode.name, "reason": "default_action"},
+            )
+        except Exception:
+            logger.warning(
+                "mode:tool_blocked emit failed for tool '%s' (default_action); "
+                "deny result returned anyway",
+                tool_name,
+                exc_info=True,
+            )
+        return result
 
     def reset_warnings(self) -> None:
-        """Reset warned tools (called when switching modes)."""
+        """Reset warned tools and context-injected hash (called when switching modes)."""
         self.warned_tools.clear()
+        self._last_context_hash = None
 
 
 async def mount(
@@ -725,6 +832,11 @@ async def mount(
         hooks.handle_tool_pre,
         priority=-20,
         name="mode-tools",
+    )
+
+    # Contribute event catalogue to observability.events channel
+    coordinator.register_contributor(
+        "observability.events", "bundle-modes:hooks-mode", lambda: ALL_EVENTS
     )
 
     return {

@@ -69,7 +69,12 @@ def _make_coordinator(
     mode_names: list[str] | None = None,
     active_mode: str | None = None,
 ) -> MagicMock:
-    """Create a mock coordinator with mode_discovery and mode_hooks in session_state."""
+    """Create a mock coordinator with mode_discovery and mode_hooks in session_state.
+
+    coordinator.hooks.emit is an AsyncMock so that bare ``await coordinator.hooks.emit(...)``
+    calls in the production code (which no longer wrap emits in per-emit try/except) work
+    without raising ``TypeError: object MagicMock can't be used in 'await' expression``.
+    """
     from amplifier_module_hooks_mode import ModeDiscovery
 
     modes_dir = tmp_path / "modes"
@@ -83,6 +88,8 @@ def _make_coordinator(
     hooks.reset_warnings = MagicMock()
 
     coordinator = MagicMock()
+    coordinator.hooks = MagicMock()
+    coordinator.hooks.emit = AsyncMock()
     coordinator.session_state = {
         "active_mode": active_mode,
         "mode_discovery": discovery,
@@ -483,6 +490,8 @@ def _make_coordinator_with_modes_dir(
     hooks.reset_warnings = MagicMock()
 
     coordinator = MagicMock()
+    coordinator.hooks = MagicMock()
+    coordinator.hooks.emit = AsyncMock()
     coordinator.session_state = {
         "active_mode": active_mode,
         "mode_discovery": discovery,
@@ -748,3 +757,451 @@ class TestModeToolClearEnforcement:
         assert result.error is not None
         assert result.error["code"] == "clear_denied"
         assert coordinator.session_state["active_mode"] == "plan"  # Unchanged
+
+
+class TestActivatedAndChangedEvents:
+    """Tests for mode:activated and mode:changed event emission from _activate_mode."""
+
+    @pytest.mark.asyncio
+    async def test_off_to_on_emits_mode_activated(self, tmp_path: Path) -> None:
+        """Off→on: exactly one mode:activated emitted with all required keys; no mode:changed."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATED, MODE_CHANGED
+
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "plan"})
+
+        assert result.success is True
+        emit_calls = coordinator.hooks.emit.call_args_list
+        activated_calls = [c for c in emit_calls if c.args[0] == MODE_ACTIVATED]
+        changed_calls = [c for c in emit_calls if c.args[0] == MODE_CHANGED]
+
+        assert len(activated_calls) == 1, "expected exactly one mode:activated call"
+        assert len(changed_calls) == 0, "expected no mode:changed calls"
+
+        payload = activated_calls[0].args[1]
+        assert payload["mode"] == "plan"
+        assert "description" in payload
+        assert "default_action" in payload
+        assert "safe_tools" in payload
+        assert "warn_tools" in payload
+        assert "confirm_tools" in payload
+        assert "block_tools" in payload
+
+    @pytest.mark.asyncio
+    async def test_on_to_on_emits_mode_changed(self, tmp_path: Path) -> None:
+        """On→on: exactly one mode:changed emitted with from_mode/to_mode; no 'mode' key; no mode:activated."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATED, MODE_CHANGED
+
+        coordinator = _make_coordinator(
+            tmp_path, ["plan", "review"], active_mode="plan"
+        )
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "review"})
+
+        assert result.success is True
+        emit_calls = coordinator.hooks.emit.call_args_list
+        activated_calls = [c for c in emit_calls if c.args[0] == MODE_ACTIVATED]
+        changed_calls = [c for c in emit_calls if c.args[0] == MODE_CHANGED]
+
+        assert len(changed_calls) == 1, "expected exactly one mode:changed call"
+        assert len(activated_calls) == 0, "expected no mode:activated calls"
+
+        payload = changed_calls[0].args[1]
+        assert payload["from_mode"] == "plan"
+        assert payload["to_mode"] == "review"
+        assert "mode" not in payload, (
+            "'mode' key must not appear in mode:changed payload"
+        )
+
+    @pytest.mark.asyncio
+    async def test_activated_and_changed_are_mutually_exclusive(
+        self, tmp_path: Path
+    ) -> None:
+        """Exactly one of mode:activated or mode:changed fires per activation, never both."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATED, MODE_CHANGED
+
+        coordinator = _make_coordinator(tmp_path, ["plan", "review"], active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        # First activation: None → plan
+        await tool.execute({"operation": "set", "name": "plan"})
+        first_calls = [
+            c
+            for c in coordinator.hooks.emit.call_args_list
+            if c.args[0] in (MODE_ACTIVATED, MODE_CHANGED)
+        ]
+        assert len(first_calls) == 1, "None→plan must emit exactly one mode event"
+
+        # Second activation: plan → review
+        coordinator.hooks.emit.reset_mock()
+        await tool.execute({"operation": "set", "name": "review"})
+        second_calls = [
+            c
+            for c in coordinator.hooks.emit.call_args_list
+            if c.args[0] in (MODE_ACTIVATED, MODE_CHANGED)
+        ]
+        assert len(second_calls) == 1, "plan→review must emit exactly one mode event"
+
+    @pytest.mark.asyncio
+    async def test_activate_mode_is_async(self, tmp_path: Path) -> None:
+        """_activate_mode must be a coroutine function (declared with async def)."""
+        import inspect
+
+        from amplifier_module_tool_mode import ModeTool
+
+        assert inspect.iscoroutinefunction(ModeTool._activate_mode), (
+            "_activate_mode must be declared with 'async def'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_emit_failure_causes_activation_to_fail_with_internal_error(
+        self, tmp_path: Path
+    ) -> None:
+        """If emit raises, activation fails and session_state is NOT updated.
+
+        The emit-before-state-change pattern means a bridge/serialization error
+        causes the outer try/except to return internal_error. Since state is only
+        mutated AFTER the emit succeeds, the observable state stays consistent with
+        the ToolResult: both report failure.
+        """
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock(side_effect=RuntimeError("emit failure"))
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "plan"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error.get("code") == "internal_error"
+        # State must NOT be changed — emit failed before state mutation
+        assert coordinator.session_state["active_mode"] is None
+
+
+class TestClearedEvent:
+    """Tests for mode:cleared event emission from _handle_clear."""
+
+    @pytest.mark.asyncio
+    async def test_clear_active_mode_emits_mode_cleared(self, tmp_path: Path) -> None:
+        """Clear when active_mode='plan' emits exactly one mode:cleared with correct payload."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_CLEARED
+
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode="plan")
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is True
+        emit_calls = coordinator.hooks.emit.call_args_list
+        cleared_calls = [c for c in emit_calls if c.args[0] == MODE_CLEARED]
+
+        assert len(cleared_calls) == 1, "expected exactly one mode:cleared call"
+        payload = cleared_calls[0].args[1]
+        assert payload == {"previous_mode": "plan"}
+
+    @pytest.mark.asyncio
+    async def test_clear_no_active_mode_does_not_emit_mode_cleared(
+        self, tmp_path: Path
+    ) -> None:
+        """Clear when active_mode=None emits no mode:cleared (previous is None guard)."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_CLEARED
+
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is True
+        emit_calls = coordinator.hooks.emit.call_args_list
+        cleared_calls = [c for c in emit_calls if c.args[0] == MODE_CLEARED]
+
+        assert len(cleared_calls) == 0, (
+            "expected no mode:cleared when no mode was active"
+        )
+
+    @pytest.mark.asyncio
+    async def test_emit_failure_causes_clear_to_fail_with_internal_error(
+        self, tmp_path: Path
+    ) -> None:
+        """If emit raises, clear fails and active_mode is NOT changed.
+
+        The emit-before-state-change pattern means a bridge/serialization error
+        causes the outer try/except to return internal_error. Since state is only
+        mutated AFTER the emit succeeds, the observable state stays consistent with
+        the ToolResult: both report failure.
+        """
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = _make_coordinator(tmp_path, ["plan"], active_mode="plan")
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock(side_effect=RuntimeError("emit failure"))
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "clear"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error.get("code") == "internal_error"
+        # State must NOT be changed — emit failed before state mutation
+        assert coordinator.session_state["active_mode"] == "plan"
+
+
+class TestTransitionDeniedAndActivationGatedEvents:
+    """Tests for mode:transition_denied and mode:activation_gated event emission."""
+
+    @pytest.mark.asyncio
+    async def test_transition_denied_emits_event(self, tmp_path: Path) -> None:
+        """From 'plan' (allowed=['review']) to 'code': error code=transition_denied and
+        exactly one mode:transition_denied emitted with correct payload."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_TRANSITION_DENIED
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(
+            modes_dir, "plan", allowed_transitions=["review"]
+        )
+        _create_mode_file_with_transitions(modes_dir, "code")
+        _create_mode_file_with_transitions(modes_dir, "review")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "code"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["code"] == "transition_denied"
+
+        emit_calls = coordinator.hooks.emit.call_args_list
+        denied_calls = [c for c in emit_calls if c.args[0] == MODE_TRANSITION_DENIED]
+        assert len(denied_calls) == 1, (
+            "expected exactly one mode:transition_denied call"
+        )
+
+        payload = denied_calls[0].args[1]
+        assert payload == {
+            "from_mode": "plan",
+            "to_mode": "code",
+            "allowed_transitions": ["review"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_gate_policy_warn_from_off_emits_activation_gated(
+        self, tmp_path: Path
+    ) -> None:
+        """gate_policy='warn' from active_mode=None: emits one mode:activation_gated
+        with gate_policy='warn', target_mode='plan', description present, from_mode=None."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATION_GATED
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(
+            modes_dir, "plan", description="Plan mode desc"
+        )
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "warn"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "plan"})
+
+        assert result.success is False
+        assert result.output["status"] == "denied"
+
+        emit_calls = coordinator.hooks.emit.call_args_list
+        gated_calls = [c for c in emit_calls if c.args[0] == MODE_ACTIVATION_GATED]
+        assert len(gated_calls) == 1, "expected exactly one mode:activation_gated call"
+
+        payload = gated_calls[0].args[1]
+        assert payload["gate_policy"] == "warn"
+        assert payload["target_mode"] == "plan"
+        assert payload["description"]  # non-empty
+        assert payload["from_mode"] is None
+
+    @pytest.mark.asyncio
+    async def test_gate_policy_confirm_from_active_mode_emits_activation_gated(
+        self, tmp_path: Path
+    ) -> None:
+        """gate_policy='confirm' from active_mode='plan': emits mode:activation_gated
+        with from_mode='plan'."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATION_GATED
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(modes_dir, "plan")
+        _create_mode_file_with_transitions(modes_dir, "code")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode="plan")
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "confirm"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "code"})
+
+        assert result.success is False
+        assert result.output["status"] == "denied"
+
+        emit_calls = coordinator.hooks.emit.call_args_list
+        gated_calls = [c for c in emit_calls if c.args[0] == MODE_ACTIVATION_GATED]
+        assert len(gated_calls) == 1, "expected exactly one mode:activation_gated call"
+
+        payload = gated_calls[0].args[1]
+        assert payload["gate_policy"] == "confirm"
+        assert payload["target_mode"] == "code"
+        assert payload["from_mode"] == "plan"
+
+    @pytest.mark.asyncio
+    async def test_gate_policy_auto_emits_no_activation_gated(
+        self, tmp_path: Path
+    ) -> None:
+        """gate_policy='auto' activates immediately without emitting mode:activation_gated."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATION_GATED
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(modes_dir, "plan")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+
+        result = await tool.execute({"operation": "set", "name": "plan"})
+
+        assert result.success is True
+        assert result.output["status"] == "activated"
+
+        emit_calls = coordinator.hooks.emit.call_args_list
+        gated_calls = [c for c in emit_calls if c.args[0] == MODE_ACTIVATION_GATED]
+        assert len(gated_calls) == 0, (
+            "expected no mode:activation_gated for auto policy"
+        )
+
+    @pytest.mark.asyncio
+    async def test_warn_retry_emits_gated_once_then_no_more(
+        self, tmp_path: Path
+    ) -> None:
+        """Warn-retry sequence: first call emits activation_gated (total=1),
+        second call activates without additional activation_gated (still total=1)."""
+        from unittest.mock import AsyncMock
+
+        from amplifier_module_tool_mode import ModeTool
+        from amplifier_module_tool_mode.events import MODE_ACTIVATION_GATED
+
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file_with_transitions(modes_dir, "plan")
+
+        coordinator = _make_coordinator_with_modes_dir(modes_dir, active_mode=None)
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+        tool = ModeTool(config={"gate_policy": "warn"}, coordinator=coordinator)
+
+        # First call: denied with gate
+        result1 = await tool.execute({"operation": "set", "name": "plan"})
+        assert result1.success is False
+
+        gated_calls_after_first = [
+            c
+            for c in coordinator.hooks.emit.call_args_list
+            if c.args[0] == MODE_ACTIVATION_GATED
+        ]
+        assert len(gated_calls_after_first) == 1, (
+            "expected exactly one mode:activation_gated after first call"
+        )
+
+        # Second call: activated (warn retry)
+        result2 = await tool.execute({"operation": "set", "name": "plan"})
+        assert result2.success is True
+        assert result2.output["status"] == "activated"
+
+        gated_calls_total = [
+            c
+            for c in coordinator.hooks.emit.call_args_list
+            if c.args[0] == MODE_ACTIVATION_GATED
+        ]
+        assert len(gated_calls_total) == 1, (
+            "expected no additional mode:activation_gated on retry activation"
+        )
+
+
+class TestEventsContributorRegistration:
+    """Tests for observability.events contributor registration in mount()."""
+
+    @pytest.mark.asyncio
+    async def test_mount_registers_observability_events_contributor(
+        self, tmp_path: Path
+    ) -> None:
+        from amplifier_module_tool_mode import mount
+        from amplifier_module_tool_mode.events import ALL_EVENTS
+
+        coordinator = MagicMock()
+        coordinator.session_state = {}
+        coordinator.mount = AsyncMock()
+        coordinator.register_contributor = MagicMock()
+
+        await mount(coordinator, config={"gate_policy": "auto"})
+
+        # Find the register_contributor call for 'observability.events'
+        obs_call = None
+        for call in coordinator.register_contributor.call_args_list:
+            if call.args[0] == "observability.events":
+                obs_call = call
+                break
+
+        assert obs_call is not None, (
+            "Expected register_contributor to be called with 'observability.events'"
+        )
+        contributor_id = obs_call.args[1]
+        supplier = obs_call.args[2]
+        assert contributor_id == "bundle-modes:tool-mode"
+        assert supplier() == ALL_EVENTS

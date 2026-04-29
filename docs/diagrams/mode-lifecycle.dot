@@ -1,0 +1,54 @@
+// mode-lifecycle.dot
+//
+// State machine for the mode sub-system lifecycle.
+//
+// States
+//   off    — no mode is active; the system is in its default state.
+//   active — a mode has been activated and is currently enforcing its policy.
+//
+// Transition edges (solid arrows)
+//   Show events that fire when the system moves from one state to another.
+//   off → active : mode:activated     (a mode was successfully turned on)
+//   active → active : mode:changed    (one active mode replaced by another)
+//   active → off  : mode:cleared      (the active mode was turned off)
+//
+// Self-loop edges — state does NOT change
+//   Dashed red (#cc6666)  — rejection events: a requested transition was blocked
+//     off    → off    : mode:activation_gated  (gate fires on off→on attempts)
+//     active → active : mode:activation_gated  (gate fires on on→on attempts too,
+//                                               because _handle_set is invoked for
+//                                               both the off→on and on→on paths)
+//     active → active : mode:transition_denied (allowed_transitions check failed)
+//
+//   Dotted gray (#666666) — policy events: side-effects while a mode is active
+//     active → active : mode:tool_blocked      (tool call blocked by mode policy)
+//     active → active : mode:tool_warned       (tool call warned by mode policy)
+//     active → active : mode:context_injected  (mode context prepended to request)
+//
+// DOT source only — no rendered SVG or PNG is checked in.
+// Validate syntax:  dot -Tsvg docs/diagrams/mode-lifecycle.dot > /dev/null
+
+digraph mode_lifecycle {
+    rankdir=LR;
+    node [shape=circle, style=filled, fillcolor="#f5f5f5", fontname="Helvetica",
+          width=1.0];
+
+    // ─── States ──────────────────────────────────────────────────────────────
+    off    [fillcolor="#e0e0e0"];
+    active [fillcolor="#c8f0c8"];
+
+    // ─── Solid transition edges (state changes) ───────────────────────────────
+    off    -> active [label="mode:activated"];
+    active -> active [label="mode:changed"];
+    active -> off    [label="mode:cleared"];
+
+    // ─── Dashed red self-loops (rejection / gate events) ─────────────────────
+    off    -> off    [label="mode:activation_gated",  style=dashed, color="#cc6666"];
+    active -> active [label="mode:activation_gated",  style=dashed, color="#cc6666"];
+    active -> active [label="mode:transition_denied", style=dashed, color="#cc6666"];
+
+    // ─── Dotted gray self-loops (policy observation events) ──────────────────
+    active -> active [label="mode:tool_blocked",    style=dotted, color="#666666"];
+    active -> active [label="mode:tool_warned",     style=dotted, color="#666666"];
+    active -> active [label="mode:context_injected",style=dotted, color="#666666"];
+}
