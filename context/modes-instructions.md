@@ -117,3 +117,11 @@ When the `mode` tool is available, agents can request mode changes programmatica
 | `mode(operation="clear")` | Deactivate current mode |
 
 The default gate policy is `warn` — the first request is blocked with a reminder. Call again to confirm the transition. This prevents accidental mode changes while still allowing agent-driven workflows.
+
+## Capabilities Are Ephemeral
+
+Modes can contribute tools, agents, skills, or context when they activate, and remove them when they deactivate. **The currently-listed capabilities are authoritative for what is available right now.** Check them — tools schema, agent catalog in `delegate`, skills-visibility list, the active-mode reminder — before invoking anything.
+
+If earlier conversation turns reference a capability that you no longer see in your current available set — a tool call, an agent delegation, a skill load — assume it was contributed by a mode that has since been deactivated. **Do not attempt to re-invoke it.** It will fail. Past in-mode turns are not a template for current behavior; the live capability list is.
+
+This applies whether a mode is currently active or not, and to any future contribution mechanism beyond today's `tools`, `agents`, `skills`, and `context`. The rule is: trust the current set, not the conversation history's evidence of past sets.

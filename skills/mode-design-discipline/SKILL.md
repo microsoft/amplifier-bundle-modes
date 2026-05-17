@@ -157,6 +157,28 @@ activate it via `/mode <name>` or see it in `/modes --all`.
 It is **wrong** for modes that restrict default behaviour — those must be visible so users
 understand why the assistant behaves differently.
 
+### Advertising rule for cross-doc references
+
+If any agent-readable file (bundle context, agent body, recipe input, README, or `.md`
+contributed by another mode) mentions a mode by name, that mode **must** be advertised.
+Documenting an invisible capability is worse than not documenting it — the LLM sees the
+name, infers the capability exists, tries to invoke it, and either fails silently or
+hallucinates plausible behaviour.
+
+Equivalently: an `advertised: false` mode **must not** appear by name in any agent-readable
+documentation. Activation of unadvertised modes must happen out-of-band — user invocation,
+hook-driven activation, recipe step, or a programmatic `mode(set, name=…)` call from a
+known agent with a hard-coded mode name. The agent-facing surface should know nothing of
+these modes.
+
+This rule has a corollary for migration work: when moving heavy context from always-on
+into a mode, if the always-on awareness file will name the mode (to tell the agent "if
+you're doing X, activate `/mode foo`"), that mode **must** be advertised. Otherwise the
+breadcrumb misleads.
+
+A quick mechanical check: `grep -rn '`/mode <name>`' <repo>` across the bundle's
+context/, agents/, and docs/ directories. Any hit on an unadvertised mode is a violation.
+
 ---
 
 ## 5. The Body Must Narrate Contributions
