@@ -647,6 +647,36 @@ class ModeHooks:
                         "Mode contributions will not be injected this turn."
                     )
                 return HookResult(action="continue")
+
+            # === Fix: late-bind contributes for CLI-prefixed mode activation ===
+            # When a mode is activated via CLI shortcut (/name as prompt prefix),
+            # mode:activated fires at the CLI layer BEFORE hooks-mode registers its
+            # handlers.  handle_mode_activated is therefore never called, and
+            # overlay.apply() never runs — contributes.agents/skills/context are
+            # silently skipped even though the mode body IS injected correctly.
+            #
+            # This is the first safe point to apply contributions: ModeDiscovery is
+            # fully populated with all bundle mode paths by the time provider:request
+            # fires.  _get_or_create_overlay() and RuntimeOverlay.apply() are both
+            # idempotent, so this block is safe on the hot path (fires once then the
+            # mode_runtime_overlay guard makes every subsequent call a no-op).
+            if (
+                mode.contributes
+                and not self.coordinator.session_state.get("mode_runtime_overlay")
+            ):
+                try:
+                    _overlay = self._get_or_create_overlay()
+                    await _overlay.apply(f"mode:{mode.name}", mode.contributes)
+                except Exception as _exc:
+                    logger.warning(
+                        "handle_provider_request: failed to late-bind contributes "
+                        "for mode '%s': %s",
+                        mode.name,
+                        _exc,
+                        exc_info=True,
+                    )
+            # === end fix ===
+
             if not mode.context:
                 return HookResult(action="continue")
 
