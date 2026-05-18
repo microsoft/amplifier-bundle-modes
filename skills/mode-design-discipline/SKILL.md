@@ -14,10 +14,38 @@ confuse the LLM, bloat context, or break silently on deactivation.
 
 ---
 
-## 1. Most Modes Don't Need Contributions
+## 1. Most Modes Don't Need Contributions — And Most Behaviors Shouldn't Have Heavy `context.include` Either
 
-The single biggest anti-bloat smell: adding `contributes:` to every mode because the
-schema supports it.
+This rule has a sibling that lives one layer up in the bundle structure. The discipline
+described in this section is half the picture; the other half is:
+
+> **Most bundle behaviors should NOT have heavy entries in their `context.include` list.**
+
+A behavior YAML's `context.include` lands in the always-on system prompt for every session
+that composes the behavior. The reflex to "just include the methodology file so it's always
+available" creates exactly the same bloat as the contributions reflex in modes — different
+mechanism, same pathology.
+
+The bar is symmetric:
+
+- **Mode `contributes`**: only add when the item is specialist-domain and only relevant
+  during the mode's workflow. Otherwise put it in the bundle (always-on) or skill (on-demand).
+- **Behavior `context.include`**: only add when the file is a lightweight awareness pointer
+  (<500 tokens, universally relevant). Otherwise put it in an agent body (context-sink),
+  a mode (mode-gated), or a skill (on-demand).
+
+See `amplifier-foundation/docs/BUNDLE_GUIDE.md §"Behavior context.include Policy"` and
+`AGENT_AUTHORING.md §"Anti-Pattern: Heavy Context in Behaviors"` for the policy authoring
+behaviors must follow.
+
+The two rules combine to form a single discipline: **never put heavy content in the
+always-on layer when an on-demand mechanism (agent body, mode contribution, skill) can hold
+it.** The mode-design path and the behavior-design path are both governed by it.
+
+---
+
+The single biggest anti-bloat smell within modes: adding `contributes:` to every mode because
+the schema supports it.
 
 ### Smell test — "This should be in the bundle, not the mode"
 
