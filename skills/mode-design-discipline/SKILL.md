@@ -248,6 +248,108 @@ beginning a review: `load_skill(skill_name="owasp-patterns")`
 This document is in your context. Use it as the primary review framework.
 ```
 
+### Cross-Mode Transition Narration
+
+Workflow modes that participate in a pipeline (e.g. `/brainstorm` → `/write-plan` →
+`/execute-plan`) need a way for the routing LLM to discover the next-step mode while
+the current mode is active. The canonical pattern is **mode body narration**, not
+schema features.
+
+Naming an adjacent mode in your mode body is FREE: the body is injected only when this
+mode is active, so the mention of the next mode is itself gated by activation. This
+respects the advertising rule for unadvertised modes — you can name them in a body
+because the body's audience is the same audience that has the mode active.
+
+Recommended body section:
+
+```markdown
+## Transitions
+
+**Done when:** [explicit completion criterion for this mode's work]
+
+**Golden path:** `/<next-mode>`
+- Tell user: "[short explanation of why next-mode is appropriate]"
+- Use `mode(operation='set', name='<next-mode>')` to transition.
+
+**Dynamic transitions:**
+- If [condition A] → use `mode(operation='set', name='<other-mode-1>')` because [reason]
+- If [condition B] → use `mode(operation='set', name='<other-mode-2>')` because [reason]
+- If [condition C] → stay in this mode because [reason]
+```
+
+The superpowers workflow modes (`brainstorm`, `write-plan`, `execute-plan`, `debug`,
+`verify`, `finish`) and the parallax-discovery wave modes (`discovery`, `verification`,
+`adversarial`, `synthesis`) all use this pattern. Read those for worked examples.
+
+**Combine with `allowed_transitions:`** when you want both the LLM-facing prose and
+the framework-level guard. The body narrates, the field enforces. They are
+complementary — don't pick one. The frontmatter prevents the LLM from transitioning
+to modes outside the workflow (defense at the schema layer); the body tells the LLM
+which transitions are appropriate and why (guidance at the prompt layer).
+
+For unadvertised modes that participate in a workflow: this body-narration pattern
+is the right discovery mechanism. `mode(operation="list")` filters by `advertised:`
+and will NOT surface unadvertised modes — so the routing LLM relies entirely on the
+parent mode's body to know that the next step exists. If you want cross-mode
+discovery without schema changes, this is the answer. (No `reveals:` schema field
+exists; if one is ever added, this pattern stays valid for the simple case.)
+
+### Companion Skill: Mandatory First-Action Loading
+
+Many modes pair with a "companion skill" that contains the methodology and discipline
+for the workflow. The skill is contributed by the mode (`contributes.skills`) so it's
+discoverable via `load_skill` only while the mode is active.
+
+**Problem:** the framework doesn't auto-load skills on mode activation. The LLM has
+to call `load_skill(skill_name="<companion>")` itself. If it doesn't, the mode's
+methodology never gets into context and the agent operates with generic instincts
+instead of the structured workflow the mode is designed to enforce.
+
+**Convention:** the mode body opens with a `<MANDATORY>` block instructing the LLM
+to load the skill BEFORE responding to the user's first request in the mode.
+
+Example (taken from systems-design):
+
+```markdown
+<MANDATORY>
+## First Action: Load the Companion Skill
+
+**Your VERY FIRST action when this mode activates MUST be:**
+
+```
+load_skill(skill_name="<companion-skill-name>")
+```
+
+This is not optional. This is not "if you think it's helpful." This is a hard
+requirement. The companion skill contains the [phase-by-phase workflow | step-by-step
+methodology | discipline framework] that governs your behavior in this mode. Without
+it, you will produce generic [responses | output | analysis] instead of the
+structured work this mode is designed to produce.
+
+**Do NOT respond to the user's question before loading the skill.** The skill
+determines HOW you respond. Load it first, then follow it.
+
+**Common rationalization to reject:** "This is just a quick question, I don't need
+the methodology." WRONG. If the user activated this mode, they want the structured
+work, not a conversational answer. If they wanted a quick take, they wouldn't have
+activated a mode.
+</MANDATORY>
+```
+
+This is a workaround for a missing framework feature — the schema does NOT yet
+support `on_activation_load_skills: [list]`. Until/unless that field is added, the
+MANDATORY narration is the only mechanism. It relies on LLM compliance with the
+imperative language; it is not framework-enforced.
+
+**Anti-pattern:** assuming the LLM will discover the companion skill via the
+skills-visibility hook listing. The hook surfaces skill names+descriptions but does
+not load skill bodies; the LLM still has to call `load_skill()`. Bodies need the
+MANDATORY block to make this reliable.
+
+If your mode has a single companion skill that should ALWAYS load on activation,
+use this pattern verbatim. Treat any variation as a yellow flag — the convention's
+imperative tone is what makes the LLM actually comply.
+
 ### Example body fragment
 
 ```markdown

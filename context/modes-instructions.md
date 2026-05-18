@@ -35,6 +35,8 @@ If a tool isn't listed, `default_action` applies (`block` by default).
 
 **When a tool requires confirmation:** The approval system will prompt the user. Wait for their decision before proceeding.
 
+**Infrastructure tools (`mode`, `todo`) bypass the mode tool cascade.** They are always callable regardless of the active mode's `default_action` or `tools.*` lists — you can always call `mode(operation="set"|"clear"|"list"|"current")` to navigate between modes and `todo` to manage task state. Mode authors should NOT list these in `tools.safe` redundantly; the bypass is handled by `hooks-mode` config (`infrastructure_tools: ["mode", "todo"]`, default). A mode with `default_action: block` and no explicit listing of these tools is NOT a trap. See `mode-schema-reference.md §3.4` for details.
+
 ## Custom Modes
 
 Users can create custom modes by adding `.md` files to:

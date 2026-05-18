@@ -1,7 +1,7 @@
 ---
 bundle:
   name: modes
-  version: 1.3.0
+  version: 1.3.1
   description: Generic mode system for runtime behavior modification
 
 includes:
