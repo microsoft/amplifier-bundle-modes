@@ -66,7 +66,7 @@ digraph simple_fix {
         label      = "Checkout Branch",
         shape      = parallelogram,
         fillcolor  = "#FFF9C4",
-        tool_command = "bash -c 'B=\"$branch\"; case \"$B\" in \"\"|*\\$branch*) B=\"resolve/fix-$(date +%Y%m%d-%H%M%S)\"; git checkout -b \"$B\" ;; *) git fetch origin \"$B\" 2>/dev/null || true; git checkout \"$B\" 2>/dev/null || git checkout -b \"$B\" ;; esac; echo \"$B\"'"
+        tool_command = "bash -c 'CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); case \"$CUR\" in main|master|HEAD|\"\") B=\"resolve/fix-$(date +%Y%m%d-%H%M%S)\"; git checkout -b \"$B\" ;; *) B=\"$CUR\" ;; esac; echo \"$B\"'"
     ]
 
     // Implement fix — the LLM handles everything: write tests, write code,
