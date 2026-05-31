@@ -2,15 +2,24 @@
 #
 # Triggered by two paths:
 #   Path A: pull_request opened — reads the full diff and every changed file,
-#           applies the five-check framework, posts a structured review comment.
+#           applies the five-check framework, posts a structured review comment
+#           ending in a machine-readable VERDICT.
 #   Path B: /review-pr comment on an issue — reviews the PR(s) referenced in the
 #           comment body (org/repo#N — PRs may live in a different repo than the issue),
-#           posts findings back to the issue. Allows a team member to kick off a review
-#           from a "pr-review-request" issue without opening the PR directly.
+#           posts findings back to the issue ending in a VERDICT.
 #
-# The bundle carries all PR review context (five checks, read-full-files protocol,
-# DM routing rules) — no local prompt files or recipes needed.
+# CONVERGENCE LOOP:
+#   When the review verdict is CHANGES_REQUESTED, the review posts a
+#   /resolve new_instance(... simple-fix.dot, branch="<pr-branch>") command so
+#   the SAME simple-fix pipeline checks out the PR branch, applies the review
+#   feedback (carried as $goal context by the bridge), pushes, and re-posts
+#   /review-pr. This loops until VERDICT: PASS.
 #
+#   Loop guard: each correction round adds a `review-round-N` label. After 3
+#   rounds the review stops firing corrections and escalates to a human with
+#   the `needs-attention` label.
+#
+# The bundle carries all PR review context (five checks, read-full-files protocol).
 # Docs: https://github.com/microsoft/amplifier-app-actions
 
 name: PR Review
@@ -43,17 +52,30 @@ jobs:
             A new pull request has been opened. Review it following the PR review principles in your context.
 
             PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            PR head branch: ${{ github.event.pull_request.head.ref }}
 
             Read the diff to orient, then read every changed file IN FULL using github_checkout_repo.
             Read related files: callers, tests, interfaces, canonical examples from relevant repos.
             Apply the five checks in order: Necessity, Layer fit, Pattern, Correctness, Calibration.
             Every finding must cite a specific file:line — no finding without evidence.
-            Post your findings as a comment on the PR using github_post_comment.
+
+            Post your findings as a comment on the PR using github_post_comment. End the comment with
+            exactly ONE of these verdict lines on its own line:
+              VERDICT: PASS
+              VERDICT: CHANGES_REQUESTED
+
+            Use VERDICT: PASS only when the PR meets every check with no required changes. Otherwise use
+            VERDICT: CHANGES_REQUESTED and make the required changes explicit and actionable (file:line + what to do).
+
+            End with the humility caveat as a blockquote:
+            > ⚠️ This is an automated, good-faith review — thorough but not definitive. It can miss context or be wrong. A human maintainer should give the final approval or feedback before merging.
           model: claude-opus-4-6
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
-  # Path B: /review-pr comment on an issue — reviews the PR(s) referenced in the comment body.
+  # Path B: /review-pr comment on an issue — reviews the referenced PR(s),
+  # emits a verdict, and on CHANGES_REQUESTED fires a correction round
+  # (bounded by a loop guard) back through simple-fix.
   review-from-issue:
     if: >-
       github.event_name == 'issue_comment' &&
@@ -63,6 +85,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Loop guard: count how many correction rounds have already run on this
+      # issue (via review-round-* labels). Stop firing corrections after 3.
+      - name: Compute review round
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROUNDS=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/labels" \
+            --jq '[.[].name | select(startswith("review-round-"))] | length' 2>/dev/null || echo 0)
+          NEXT=$((ROUNDS + 1))
+          echo "round=$ROUNDS"  >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT"     >> "$GITHUB_OUTPUT"
+          if [ "$ROUNDS" -ge 3 ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: microsoft/amplifier-app-actions@main
         with:
@@ -80,7 +120,26 @@ jobs:
 
             This issue: https://github.com/${{ github.repository }}/issues/${{ github.event.issue.number }}
 
-            Post your review as a comment on this issue using github_post_comment.
+            STEP 1 — POST THE REVIEW:
+            Post your review as a comment on this issue using github_post_comment. The review MUST:
+            - List findings (file:line + what is wrong) for each PR, OR confirm each check passes.
+            - End with exactly ONE verdict line on its own line:
+                VERDICT: PASS
+                VERDICT: CHANGES_REQUESTED
+              Use PASS only when every PR meets every check with no required changes.
+            - End with the humility caveat as a blockquote:
+              > ⚠️ This is an automated, good-faith review — thorough but not definitive. It can miss context or be wrong. A human maintainer should give the final approval or feedback before merging.
+
+            STEP 2 — DRIVE THE CONVERGENCE LOOP (based on your verdict):
+
+            If VERDICT: PASS — post a second short comment: "✅ Review passed — the PR meets the review rubric." Then apply the label `review-passed`. Do NOT post any /resolve command. The loop ends here.
+
+            If VERDICT: CHANGES_REQUESTED:
+              loop_exhausted = ${{ steps.guard.outputs.exhausted }}
+              - If loop_exhausted is "true": do NOT fire another correction. Post a comment explaining that the automated correction limit (3 rounds) was reached and a human should take over. Apply the label `needs-attention`. Stop.
+              - If loop_exhausted is "false": fire a correction round. For EACH referenced PR that needs changes, post this command as its own comment (substitute the real values):
+                  /resolve new_instance(resolver="dot-graph", pipeline="custom", path="./.amplifier-resolve/simple-fix.dot", branch="<PR_HEAD_BRANCH>", repos="<PR_OWNER>/<PR_REPO>")
+                where <PR_HEAD_BRANCH> is the head branch of that PR (look it up from the PR — it is the branch the fix must amend, NOT main), and <PR_OWNER>/<PR_REPO> is the repo the PR lives in. The review findings you posted above ARE the correction instructions — the bridge feeds this whole comment thread to the fix pipeline as context. Then apply the label `review-round-${{ steps.guard.outputs.next }}`.
           model: claude-sonnet-4-6
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
