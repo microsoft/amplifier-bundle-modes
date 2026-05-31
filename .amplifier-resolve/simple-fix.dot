@@ -66,7 +66,7 @@ digraph simple_fix {
         label      = "Checkout Branch",
         shape      = parallelogram,
         fillcolor  = "#FFF9C4",
-        tool_command = "bash -c 'BRANCH=\"resolve/fix-$(date +%Y%m%d-%H%M%S)\"; git checkout -b \"$BRANCH\"; echo \"$BRANCH\"'"
+        tool_command = "bash -c 'B=\"$branch\"; case \"$B\" in \"\"|*\\$branch*) B=\"resolve/fix-$(date +%Y%m%d-%H%M%S)\"; git checkout -b \"$B\" ;; *) git fetch origin \"$B\" 2>/dev/null || true; git checkout \"$B\" 2>/dev/null || git checkout -b \"$B\" ;; esac; echo \"$B\"'"
     ]
 
     // Implement fix — the LLM handles everything: write tests, write code,
@@ -101,6 +101,7 @@ digraph simple_fix {
 set -e
 OWNER_REPO=\"$delivery_repo\"
 if [ -z \"$OWNER_REPO\" ]; then printf '{\"error\": \"delivery_repo not set\"}'; exit 1; fi
+OWNER=$(echo \"$OWNER_REPO\" | cut -d/ -f1)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git remote add gh \"https://x-access-token:${GH_TOKEN}@github.com/${OWNER_REPO}.git\" 2>/dev/null || git remote set-url gh \"https://x-access-token:${GH_TOKEN}@github.com/${OWNER_REPO}.git\"
 git push -u gh \"$BRANCH\" 2>&1
@@ -110,14 +111,26 @@ python3 - \"$PR_TITLE\" \"$BRANCH\" > /tmp/pr_body.json <<'PYJSON'
 import json, sys
 print(json.dumps({\"title\": sys.argv[1], \"head\": sys.argv[2], \"base\": \"main\", \"body\": \"Automated fix from triage findings. See docs/fix-design.md and docs/fix-plan.md.\"}))
 PYJSON
-curl -s -X POST -H \"Authorization: token ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/${OWNER_REPO}/pulls\" --data @/tmp/pr_body.json > /tmp/pr_resp.json
+curl -s -X POST -H \"Authorization: token ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/${OWNER_REPO}/pulls\" --data @/tmp/pr_body.json > /tmp/pr_create.json
+curl -s -H \"Authorization: token ${GH_TOKEN}\" -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/${OWNER_REPO}/pulls?state=open&head=${OWNER}:${BRANCH}\" > /tmp/pr_list.json
 python3 - \"$OWNER_REPO\" <<'PYOUT'
 import json, sys
 owner_repo = sys.argv[1]
-try: d = json.load(open('/tmp/pr_resp.json'))
-except Exception: d = {}
-url = d.get('html_url','') if isinstance(d,dict) else ''
-num = d.get('number','') if isinstance(d,dict) else ''
+def load(p):
+    try: return json.load(open(p))
+    except Exception: return None
+c = load('/tmp/pr_create.json'); url=''; num=''
+if isinstance(c, dict) and c.get('html_url'):
+    url = c['html_url']; num = c.get('number','')
+else:
+    lst = load('/tmp/pr_list.json')
+    if isinstance(lst, list) and lst:
+        url = lst[0].get('html_url',''); num = lst[0].get('number','')
+if not url:
+    msg = c.get('message','unknown') if isinstance(c, dict) else 'no response'
+    sys.stderr.write('PR creation/lookup failed: ' + str(msg)[:300])
+    print(json.dumps({'error': 'PR not created: ' + str(msg)[:200]}))
+    sys.exit(1)
 print(json.dumps({'delivery.pr_url': url, 'delivery.pr_number': str(num), 'delivery.owner_repo': owner_repo, 'pr_url': url, 'pr_number': str(num), 'owner_repo': owner_repo}))
 PYOUT"
     ]
