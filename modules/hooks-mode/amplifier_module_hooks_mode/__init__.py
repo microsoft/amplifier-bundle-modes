@@ -644,10 +644,8 @@ class ModeHooks:
                 # the previous process, but the handler can no longer read
                 # the mode name to inject context.  Log a loud WARNING so the
                 # issue is visible in logs rather than silently missing.
-                if (
-                    self.coordinator.session_state.get("mode_runtime_overlay")
-                    is not None
-                ):
+                overlay_obj = self.coordinator.session_state.get("mode_runtime_overlay")
+                if overlay_obj is not None and getattr(overlay_obj, "_scope_claims", None):
                     logger.warning(
                         "Mode runtime overlay exists but active_mode is None — "
                         "possible session-resume state loss. "
