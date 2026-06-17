@@ -697,7 +697,8 @@ class ModeHooks:
 
             contributed_content = ""
             context_paths: list[str] = (
-                self.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY) or []
+                self.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY)
+                or []
             )
             if context_paths:
                 # Build a newline-separated block of @-mentions; _resolve_mentions
@@ -909,6 +910,7 @@ class ModeHooks:
                     # emitted MODE_ACTIVATION_FAILED via its _emit method.
                     # Clear active_mode so the session reflects the failure.
                     self.coordinator.session_state["active_mode"] = None
+                    self._discard_overlay_if_empty()
                     return HookResult(action="continue")
 
             await self.coordinator.hooks.emit(
@@ -925,6 +927,7 @@ class ModeHooks:
             # Clear active_mode on unexpected exceptions too — the activation
             # did not complete successfully.
             self.coordinator.session_state["active_mode"] = None
+            self._discard_overlay_if_empty()
             await self.coordinator.hooks.emit(
                 MODE_ACTIVATION_FAILED,
                 {"mode": mode_name, "error": str(exc)},
@@ -1003,6 +1006,7 @@ class ModeHooks:
                 MODE_TRANSITION_COMPLETED,
                 {"mode": mode_name, "phase": "cleared"},
             )
+            self._discard_overlay_if_empty()
         except Exception as exc:
             logger.warning(
                 "handle_mode_cleared: overlay revoke failed for mode '%s': %s",
@@ -1021,6 +1025,31 @@ class ModeHooks:
         """Reset warned tools and context-injected hash (called when switching modes)."""
         self.warned_tools.clear()
         self._last_context_hash = None
+
+    def _discard_overlay_if_empty(self) -> None:
+        """Remove mode_runtime_overlay from session_state when it holds no active scopes.
+
+        Called after overlay.revoke() in handle_mode_cleared() and on failure paths
+        in handle_mode_activated() to prevent the B3 guard from firing false-positive
+        warnings on normal in-process deactivations.
+
+        The overlay is retained when scope_claims is non-empty (e.g. a mode→mode
+        transition where the new scope was applied before this is called), preserving
+        refcount coherence.  A fresh overlay is created on demand by
+        _get_or_create_overlay() on the next activation.
+
+        Defensive: any failure during inspection leaves the overlay in place — a
+        stuck overlay is far better than a broken transition.
+        """
+        try:
+            overlay = self.coordinator.session_state.get("mode_runtime_overlay")
+            if overlay is None:
+                return
+            state = overlay.dump_state()
+            if not state["scope_claims"]:
+                self.coordinator.session_state.pop("mode_runtime_overlay", None)
+        except Exception:
+            pass
 
 
 async def mount(
