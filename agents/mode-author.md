@@ -21,22 +21,12 @@ meta:
     Context: Design conversation for a new mode is complete, all decisions settled
     user: 'Draft the mode file for the systems-design mode we just designed'
     assistant: 'I will delegate to mode-author with the settled name, intent, tool policy, and contributions to draft and write the file.'
-    <commentary>
-    mode-author is reached after the design conversation concludes. It receives a
-    complete delegation instruction and produces the file in one shot. It does not
-    ask clarifying questions.
-    </commentary>
     </example>
 
     <example>
     Context: User has a clear intent and wants the mode written immediately
     user: 'Write the mode for me: name=deep-read, intent=read-only codebase exploration with LSP, tool policy=safe read tools only, default_action=block'
     assistant: 'I will delegate to mode-author — the intent and tool policy are settled, it will draft and write the file directly.'
-    <commentary>
-    mode-author requires settled intent. When a user provides all parameters
-    directly, delegation is immediate. The agent writes the file and reports
-    the path — it does not start a conversation.
-    </commentary>
     </example>
 
 model_role:

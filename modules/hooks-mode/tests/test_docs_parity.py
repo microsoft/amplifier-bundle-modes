@@ -23,7 +23,7 @@ REQUIRED_TERMS = ["shortcut", "default", "name", "false"]
 @pytest.mark.parametrize(
     "relpath",
     [
-        "context/modes-instructions.md",
+        "context/mode-schema-reference.md",
         "README.md",
     ],
 )
@@ -37,4 +37,18 @@ def test_documentation_describes_shortcut_semantics(relpath: str) -> None:
         f"The file must document: the shortcut field, that it defaults "
         f"to the mode's name, and that `shortcut: false` disables it. "
         f"See design doc §9.6 (docs/designs/default-shortcut-to-name.md)."
+    )
+
+
+def test_modes_instructions_points_to_schema_reference() -> None:
+    """context/modes-instructions.md no longer documents shortcut semantics
+    inline (moved to mode-schema-reference.md by the 1e2 context-hygiene
+    treatment's T2 item) -- it must instead point authors there."""
+    path = BUNDLE_ROOT / "context" / "modes-instructions.md"
+    assert path.is_file(), f"expected doc file missing: {path}"
+    content = path.read_text(encoding="utf-8")
+    assert "mode-schema-reference.md" in content, (
+        "context/modes-instructions.md must point authors at "
+        "mode-schema-reference.md for the frontmatter schema, field "
+        "reference, and shortcut rules (including `shortcut: false`)."
     )
