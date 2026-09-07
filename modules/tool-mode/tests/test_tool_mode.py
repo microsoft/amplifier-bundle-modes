@@ -924,7 +924,12 @@ class TestClearedEvent:
 
         assert len(cleared_calls) == 1, "expected exactly one mode:cleared call"
         payload = cleared_calls[0].args[1]
-        assert payload == {"previous_mode": "plan"}
+        # Dual-key contract, introduced deliberately by 41c3e41 ("align tool-mode
+        # event payloads with handler contract"): "name" is the canonical key
+        # hooks-mode's handle_mode_cleared reads FIRST, and "previous_mode" is
+        # kept for external listeners that predate the rename. Emitting only the
+        # legacy key is the exact bug 41c3e41 fixed, so both are asserted here.
+        assert payload == {"name": "plan", "previous_mode": "plan"}
 
     @pytest.mark.asyncio
     async def test_clear_no_active_mode_does_not_emit_mode_cleared(
