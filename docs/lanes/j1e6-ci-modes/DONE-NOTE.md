@@ -325,3 +325,27 @@ resolution). Choosing branch C here would have been a false BLOCKED.
 or have the goal say — *claim if free; if a sibling holds it, proceed and record
 per-repo completion via `work_erratum`, and let the holder or the manager resolve
 once every lane has landed.*
+
+**Not two lanes — seven.** The erratum this lane filed at 19:47:49Z said "two
+lanes have now hit the same defect" and "the third repo of the nineteen". Both
+counts were wrong, and are corrected in a follow-up erratum at 19:48:45Z: at the
+time of writing, **11 errata carried seven repo slices** besides wayfinder
+(browser-tester, notify, tool-filesystem, ios-tester, amplifier-tester, stories,
+modes), and **seven of seven** lanes that attempted the claim hit the refusal.
+
+**And the remedy already on record does not work.** Four lanes before this one
+filed a stale cross-lane count and then corrected it — tool-filesystem
+(19:36:19Z), ios-tester (19:36:54Z), amplifier-tester (19:45:16Z), stories
+(19:47:12Z) — each naming the same fix: *re-read the errata immediately before
+filing*. This lane is the fifth, and re-reading would not have helped: stories
+filed its correction **37 seconds** before this lane's erratum landed, with the
+text already composed. On an item with nineteen concurrent lanes, any ordinal is
+stale between composing and writing. That is a race, not carelessness — five of
+the eight slice-filing lanes lost it, and the eight of us have now spent five
+extra errata on arithmetic about each other.
+
+**So the better rule: a per-lane erratum should carry no cross-lane ordinal at
+all.** State what *your* repo delivered and what *you* observed ("work_claim was
+refused for this lane; here is the slice"). How many repos are done, and how many
+lanes hit a defect, is a whole-item question — answerable correctly once, by the
+reader of the finished list, and never correctly by a lane mid-flight.
