@@ -37,6 +37,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# Capability names used by RuntimeOverlay (producer-neutral names after rename)
+from amplifier_foundation import (
+    RUNTIME_CONTEXT_OVERLAY_CAPABILITY as _CAP_CONTEXT,
+    RUNTIME_SKILL_OVERLAY_CAPABILITY as _CAP_SKILLS,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -45,12 +51,6 @@ import pytest
 # (tests/ → hooks-mode/ → modules/ → amplifier-bundle-modes/)
 BUNDLE_ROOT: Path = Path(__file__).resolve().parents[3]
 MODES_DIR: Path = BUNDLE_ROOT / "modes"
-
-# Capability names used by RuntimeOverlay (producer-neutral names after rename)
-from amplifier_foundation import (
-    RUNTIME_CONTEXT_OVERLAY_CAPABILITY as _CAP_CONTEXT,
-    RUNTIME_SKILL_OVERLAY_CAPABILITY as _CAP_SKILLS,
-)
 
 
 # ---------------------------------------------------------------------------
