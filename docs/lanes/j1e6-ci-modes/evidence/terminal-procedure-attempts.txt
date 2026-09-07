@@ -1,0 +1,60 @@
+# TERMINAL PROCEDURE (GOAL Procedure 5) -- ATTEMPTED, REFUSED BY MECHANISM
+# lane j1e6-ci-modes / item model_performance-j1e6
+# captured 2026-09-07T19:52Z, AFTER every deliverable had landed
+#
+# Recorded because six sibling lanes INFERRED that work_resolve was unreachable
+# on this item. This lane executed both calls and quotes what they returned, so
+# the manager is deciding on a measured refusal rather than on six lanes' prose.
+
+== 1. work_status() ==
+holding: null
+  -> this session holds no item at all.
+  -> model_performance: held=2, held_by=[agent-spark-1-2821962,
+     agent-spark-1-3132588] -- neither is this session.
+
+== 2. work_claim(project="model_performance", item_id="model_performance-j1e6") ==
+success: false
+"claim model_performance-j1e6 as 'agent-spark-1-2995878' failed:
+ Error claiming model_performance-j1e6: issue already claimed by
+ agent-spark-1-1101253"
+
+  -> attempted twice, ~25 minutes apart (lane start and after completion).
+     Identical refusal both times. The holder is the lane that resolved the
+     item over amplifier-bundle-wayfinder at 2026-09-07T18:14:01Z.
+
+== 3. work_resolve(id="model_performance-j1e6", reason=<this lane's summary>) ==
+success: false
+"not currently holding 'model_performance-j1e6' in this session --
+ refusing to resolve an item this session did not claim"
+
+  -> This is the fence working as designed, not a malfunction. A second,
+     independent fence sits behind it: the item is ALREADY resolved, and
+     work_resolve against a resolved item is a no-op success ONLY when the
+     text is byte-for-byte identical to what is stored. This lane's summary
+     differs from the wayfinder lane's, so even holding the item, the call
+     would fail non-zero and write nothing -- by design, after seven wrong
+     resolutions shipped under the old silently-succeeding behaviour.
+
+== 4. What WAS used instead ==
+work_erratum(project, item_id, text)  -- succeeded, twice:
+    19:47:49Z  the amplifier-bundle-modes slice
+    19:48:45Z  a correction to two cross-lane counts in it
+  Append-only. Requires no claim. Never rewrites the stored resolution, never
+  touches status/closed_at/the holder. The item's `errata` list and
+  `corrected: true` flag travel with it everywhere the resolution is shown.
+
+== 5. The ONE path that would make work_resolve reachable, and why it was NOT taken ==
+work_reopen(project, item_id, reason) -> work_claim -> work_resolve.
+  Deliberately not taken by this lane. Reopening:
+    * CLEARS closed_at, so the item re-lands on today's date and every
+      throughput roll-up moves by one item (the tool reports this cost
+      explicitly rather than hiding it);
+    * re-lands a 19-lane item in the READY queue that other live lanes are
+      polling, and takes custody of the shared record away from them;
+    * is the sanctioned remedy for when the WORK must be redone. Here the work
+      is done and the RECORD is merely incomplete -- which is exactly the case
+      work_erratum exists for.
+  It is also a whole-item, cross-lane decision (it affects all 19 slices), i.e.
+  a priority/stop call for the manager, not for lane 8 of 19. The
+  browser-tester lane reached the same conclusion first and said so: "the
+  reopen call, if the manager wants the remaining 17 tracked, is theirs."

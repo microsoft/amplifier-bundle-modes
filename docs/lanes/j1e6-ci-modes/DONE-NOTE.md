@@ -1,8 +1,17 @@
 # DONE-NOTE — lane `j1e6-ci-modes` (`model_performance-j1e6`)
 
-**Outcome: A — RESOLVED.** Every deliverable is **DONE**. Nothing was recorded
+**Outcome: A.** Every deliverable is **DONE**. Nothing was recorded
 NOT-POSSIBLE, so outcome branch B does not apply; nothing was unreachable, so
 branch C does not apply.
+
+**Read §9.1 first if you are checking the terminal state.** Branch A's checkable
+end state — *"work item `model_performance-j1e6` is resolved with a user-readable
+summary AND the deliverables below exist as a draft PR"* — holds: the item **is**
+resolved (2026-09-07T18:14:01Z, by the wayfinder lane) and this lane's
+deliverables exist as PR #32. But **this lane did not call `work_resolve`, and
+could not**: both `work_claim` and `work_resolve` were executed and both refused,
+verbatim, in §9.1. The per-repo result is on the item via `work_erratum` instead.
+That substitution is deliberate and is the subject of the goal defect in §9.
 
 **Spend: $0.00 of the $0 authority.** CI minutes only — 2 gating runs. No API
 call, no DTU, no container, nothing registered in the infra ledger, nothing to
@@ -305,6 +314,72 @@ run (it is the manager's batch-close verb).
 ---
 
 ## 9. Goal defect, recorded per procedure
+
+### 9.1 The terminal procedure was ATTEMPTED and REFUSED — measured, not inferred
+
+Procedure 5 ends in `work_resolve(id="model_performance-j1e6", reason=…)`. **This
+lane ran that call. It refused.** Full transcript:
+`evidence/terminal-procedure-attempts.txt`.
+
+```
+work_claim(project="model_performance", item_id="model_performance-j1e6")
+  success: false
+  "claim model_performance-j1e6 as 'agent-spark-1-2995878' failed:
+   Error claiming model_performance-j1e6: issue already claimed by
+   agent-spark-1-1101253"
+                                    (attempted twice, ~25 min apart, identical)
+
+work_resolve(id="model_performance-j1e6", reason=<this lane's summary>)
+  success: false
+  "not currently holding 'model_performance-j1e6' in this session --
+   refusing to resolve an item this session did not claim"
+
+work_status()
+  holding: null
+```
+
+**Two independent fences, both by design.** The first is custody: a session
+cannot resolve an item it never claimed. The second sits behind it — the item is
+already `resolved`, and `work_resolve` against a resolved item is a no-op success
+**only** when the text is byte-for-byte what is stored. This lane's summary
+differs from the wayfinder lane's, so **even holding the item the call would fail
+non-zero and write nothing** — a guard added after seven wrong resolutions
+shipped under the old silently-succeeding behaviour.
+
+So Procedure 5's verb is not merely awkward on this item; it is **mechanically
+unreachable** for eighteen of its nineteen lanes. Six sibling lanes concluded the
+same thing by inference. This lane executed both calls so the record carries the
+refusal strings themselves.
+
+### 9.2 What was used instead, and the one path not taken
+
+`work_erratum(project, item_id, text)` — succeeded twice (19:47:49Z, the slice;
+19:48:45Z, a correction). Append-only, needs no claim, never rewrites the stored
+resolution and never touches `status` / `closed_at` / the holder. The `errata`
+list and the `corrected: true` flag travel with the item everywhere its
+resolution is displayed.
+
+**The one path that would make `work_resolve` reachable is
+`work_reopen` → `work_claim` → `work_resolve`, and this lane deliberately did not
+take it.** Reopening clears `closed_at` (so the item re-lands on today's date and
+every throughput roll-up moves by one), re-lands a nineteen-lane item in the
+**ready queue that other live lanes are polling**, and takes custody of the shared
+record away from them. It is also the sanctioned remedy for when the *work* must
+be redone — here the work is done and only the *record* is incomplete, which is
+precisely what `work_erratum` is for.
+
+Above all it is a **whole-item, cross-lane decision**: one item, nineteen slices,
+and reopening changes the terminal state of all of them. That is a priority/stop
+call for the manager, not for lane 8 of 19. The browser-tester lane reached the
+same conclusion first and said so — *"the reopen call, if the manager wants the
+remaining 17 tracked, is theirs."*
+
+**Recommendation to the manager, explicitly:** once the remaining lanes have
+landed, **reopen the item once, and resolve it once**, with a summary covering all
+nineteen repos and the errata as its per-repo detail. One reopen for the whole
+batch costs one item's worth of roll-up movement; nineteen lanes each reopening
+to satisfy their own copy of Procedure 5 would cost nineteen, and would have them
+fighting over custody of a single record while they worked.
 
 **This item is one item with nineteen lanes, but the per-lane goal applies a
 single-lane claim/resolve procedure to it.** `work_claim` was refused —
