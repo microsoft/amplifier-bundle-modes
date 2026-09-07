@@ -1,0 +1,24 @@
+{
+  "_README": "Vendored VERBATIM copies of the v1 lean-head text, for byte-pinning. Do not hand-edit: regenerate from the source below. 'context/modes-instructions.md' is v1_instructions.json span 3's body plus the single trailing newline the <context_file> wrapper consumes when the file is rendered into the head (body 2402 chars on the wire; 2403 chars as a file). 'mode' is v1_tools.json's 'mode' entry verbatim, no trailing newline.",
+  "_provenance": {
+    "item": "model_performance-va53",
+    "lane": "3ahq-leanhead-modes",
+    "upstream_patch": "microsoft/amplifier-foundation docs/lanes/zc6t-lean-head-ship/patches/context-files/03-amplifier-bundle-modes-modes-instructions.md.patch (PR #372)",
+    "v1_source": ".amplifier/evaluation/probes/bji-lean-head/{v1_instructions.json,v1_tools.json} (microsoft/openai-evals-team-ci)",
+    "v1_instructions_span_index": 3
+  },
+  "context_files": {
+    "context/modes-instructions.md": "# Amplifier Modes\nModes = runtime behavior overlays; an active mode injects guidance and enforces tool policies.\n`/mode <name>` activate (toggles if active) · `/modes` list · `/mode off` deactivate.\nAn active mode shows as `<system-reminder source=\"mode-<name>\">`, categorizes tools per its config, displays `[mode]>` to the user.\nPolicies: `safe` normal · `warn` first call blocked, retry to proceed · `confirm` user approval required before execution · `block` disabled. Unlisted tools → `default_action` (default `block`). Blocked/warned calls return a policy result: for `warn` state your intent and call again if appropriate; for `confirm` wait for the user's decision from the approval system.\n`mode` and `todo` are infrastructure tools: always callable, bypassing the cascade under any `default_action`/`tools.*`, so `mode(operation=\"set\"|\"clear\"|\"list\"|\"current\")` and `todo` are never blocked. Authors must NOT list them in `tools.safe`; the bypass is `hooks-mode` config (`infrastructure_tools: [\"mode\", \"todo\"]`, default); `default_action: block` without them is not a trap. See `mode-schema-reference.md §3.4`.\nCustom modes: `.md` in `.amplifier/modes/` (project) or `~/.amplifier/modes/` (user-global); YAML frontmatter `mode:` (name, description, tool policies) + markdown guidance. Authoring (schema, fields, shortcut rules, `contributes` blocks, naming): read `@modes:context/mode-schema-reference.md` or delegate to `mode-author`.\nIn a mode the user explicitly chose it: follow its guidance, respect tool policies, honor user intent; never ignore guidance or route around restrictions; adapt, and suggest `/mode off` if the user needs restricted capabilities.\nAgent-initiated: `mode(operation=\"list\"|\"current\"|\"clear\")`, `mode(operation=\"set\", name=\"plan\")`. Gate policy defaults to `warn`: first request blocked with a reminder, call again to confirm.\nCapabilities are ephemeral — modes add/remove tools, agents, skills, context. Currently-listed capabilities are authoritative: check the tools schema, `delegate` agent catalog, skills-visibility list, active-mode reminder before invoking anything. A capability from an earlier turn that is no longer listed came from a deactivated mode — do NOT re-invoke it, it will fail. Holds with or without an active mode, and for any future contribution mechanism beyond `tools`/`agents`/`skills`/`context`: trust the current set, not history.\n"
+  },
+  "tool_descriptions": {
+    "mode": "Manage runtime modes. Operations: 'set' (activate a mode), 'clear' (deactivate), 'list' (show available), 'current' (show active). Mode transitions may require confirmation depending on gate policy."
+  },
+  "sha256": {
+    "context/modes-instructions.md": "4b55377693ed28d4fe2c6f4789abcac1f6c636cb171644fd794674dc8bd66939",
+    "mode": "02b7364bddf04e4c4c20dd42a0cc993e6faff35ae4b17ff4b153c0686d28c3bb"
+  },
+  "chars": {
+    "context/modes-instructions.md": 2403,
+    "mode": 198
+  }
+}

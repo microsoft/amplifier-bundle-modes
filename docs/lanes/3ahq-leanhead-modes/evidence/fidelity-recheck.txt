@@ -1,0 +1,97 @@
+FIDELITY RE-CHECK, RUN AT TODAY'S HEAD (not inherited from zc6t)
+stock chars: 4870  sha256 66ed81fb91b6ef09c795e407be920edc7edd173b8e005c74ba74680cd371a9da
+lean  chars: 2403  sha256 4b55377693ed28d4fe2c6f4789abcac1f6c636cb171644fd794674dc8bd66939
+saving: 2467 chars (50.7%)
+
+Mechanical sweep: every backticked token in the stock text (35), checked literally in the lean text.
+
+STOCK TOKEN                                                PRESENT LITERALLY IN LEAN
+'.amplifier/modes/'                                        yes
+'.md'                                                      yes
+'/mode <name>'                                             yes
+'/mode off'                                                yes
+'/modes'                                                   yes
+'<system-reminder source="mode-<name>">'                   yes
+'@modes:context/mode-schema-reference.md'                  yes
+'[mode]>'                                                  yes
+'agents'                                                   yes
+'block'                                                    yes
+'confirm'                                                  yes
+'context'                                                  yes
+'contributes'                                              yes
+'default_action'                                           yes
+'default_action: block'                                    yes
+'delegate'                                                 yes
+'hooks-mode'                                               yes
+'infrastructure_tools: ["mode", "todo"]'                   yes
+'mode'                                                     yes
+'mode(operation="clear")'                                  NO  <-- adjudicate
+'mode(operation="current")'                                NO  <-- adjudicate
+'mode(operation="list")'                                   NO  <-- adjudicate
+'mode(operation="set", name="plan")'                       yes
+'mode(operation="set"|"clear"|"list"|"current")'           yes
+'mode-author'                                              yes
+'mode-schema-reference.md §3.4'                            yes
+'mode:'                                                    yes
+'safe'                                                     yes
+'skills'                                                   yes
+'todo'                                                     yes
+'tools'                                                    yes
+'tools.*'                                                  yes
+'tools.safe'                                               yes
+'warn'                                                     yes
+'~/.amplifier/modes/'                                      yes
+
+Literally absent: 3
+  - 'mode(operation="clear")'
+  - 'mode(operation="current")'
+  - 'mode(operation="list")'
+
+ADJUDICATION of the 3 absences -- all FALSE POSITIVES, collapsed not dropped:
+  The lean text states the same four operations in alternation form:
+    present: mode(operation="set"|"clear"|"list"|"current") True
+    present: mode(operation="list"|"current"|"clear")       True
+    present: mode(operation="set", name="plan")             True
+  operations reachable from lean text: ['clear', 'current', 'list', 'set']
+  -> all four stated. This matches the pre-adjudication recorded on model_performance-va53.
+
+Semantic sweep: rules / constraints / commands / pointers in the stock text.
+RULE / COMMAND / POINTER                                   STOCK   LEAN
+definition: runtime behaviour overlays, no bundle change   yes     yes
+command /mode <name> (activate, toggles if active)         yes     yes
+command /modes (list)                                      yes     yes
+command /mode off (deactivate)                             yes     yes
+context injection marker                                   yes     yes
+visual indicator                                           yes     yes
+policy safe                                                yes     yes
+policy warn                                                yes     yes
+policy confirm                                             yes     yes
+policy block                                               yes     yes
+unlisted tool -> default_action (block by default)         yes     yes
+infrastructure-tools bypass config                         yes     yes
+authors must not list them in tools.safe                   yes     yes
+bypass owner                                               yes     yes
+pointer: schema reference section                          yes     yes
+custom modes: project dir                                  yes     yes
+custom modes: user-global dir                              yes     yes
+authoring pointer: mention path                            yes     yes
+authoring pointer: agent                                   yes     yes
+agent-initiated set with name                              yes     yes
+suggest /mode off when restricted                          yes     yes
+capabilities are ephemeral                                 yes     yes
+check the skills-visibility list                           yes     yes
+check the tools schema                                     yes     yes
+delegate agent catalog                                     yes     yes
+
+RULES LOST: 0
+Nothing needed restoring. Contrast: zc6t's fidelity-report.json recorded 4 flags
+across all 23 targets -- 3 false positives and ONE genuine loss (edit_file, a
+different repo, restored in-repo at +450 chars). This repo carries none.
+
+PROSE DROPPED THAT IS NOT A RULE (recorded for completeness, no action):
+  - 'This prevents accidental mode changes while still allowing agent-driven
+    workflows.' -- rationale for the warn gate; the gate itself survives.
+  - 'When the `mode` tool is available, ...' -- conditional framing; the lean
+    text states the operations unconditionally.
+  - 'Anti-pattern:' / 'Correct pattern:' labels -- both behaviours survive as
+    prose ('never ignore guidance or route around restrictions; adapt').

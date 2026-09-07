@@ -1,0 +1,13 @@
+# post-change: full suite at 79ccd37015d2baf67bbc486d74ebc94e23459c1d
+--- modules/hooks-mode ---
+
+tests/test_token_cost_when_inactive.py:193: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_token_cost_when_inactive.py::test_inactive_session_provider_request_returns_continue
+1 failed, 296 passed in 0.28s
+--- modules/tool-mode ---
+
+tests/test_tool_mode.py:927: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_tool_mode.py::TestClearedEvent::test_clear_active_mode_emits_mode_cleared
+1 failed, 52 passed in 0.12s
