@@ -1,0 +1,4 @@
+# DELIBERATE DEFECT -- scratch branch only. Malformed YAML so the
+# bundle-structure job fails parsing behaviors/*.yaml.
+bundle:
+  name: [unclosed
