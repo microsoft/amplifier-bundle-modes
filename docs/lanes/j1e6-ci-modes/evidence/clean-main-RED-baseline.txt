@@ -1,0 +1,25 @@
+# CLEAN MAIN BASELINE - amplifier-bundle-modes @ d7f5f2e4ea50203c635152dccdd919348f723742 (main HEAD, before this lane)
+# captured 2026-09-07T19:35:15Z
+# venv: python 3.13, editable installs of both modules, pytest + pytest-asyncio,
+#       amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main
+
+== ruff 0.16.6 check --isolated --select E4,E7,E9,F . ==
+modules/hooks-mode/tests/test_b3_false_positive_fix.py:201:9: F841 Local variable `result` is assigned to but never used
+modules/hooks-mode/tests/test_mode_author_agent.py:11:8: F401 [*] `pytest` imported but unused
+modules/hooks-mode/tests/test_token_cost_when_inactive.py:48:1: E402 Module level import not at top of file
+Found 3 errors.
+[*] 1 fixable with the `--fix` option (1 hidden fix can be enabled with the `--unsafe-fixes` option).
+
+== pytest modules/hooks-mode ==
+........................................................................ [ 72%]
+...................................................................F.... [ 96%]
+.........                                                                [100%]
+=========================== short test summary info ============================
+FAILED tests/test_token_cost_when_inactive.py::test_inactive_session_provider_request_returns_continue
+1 failed, 296 passed in 0.26s
+
+== pytest modules/tool-mode ==
+............................................F........                    [100%]
+=========================== short test summary info ============================
+FAILED tests/test_tool_mode.py::TestClearedEvent::test_clear_active_mode_emits_mode_cleared
+1 failed, 52 passed in 0.10s

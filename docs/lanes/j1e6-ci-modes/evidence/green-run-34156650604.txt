@@ -1,0 +1,22 @@
+# GREEN PROOF -- run 34156650604 (PR #32, branch lane/j1e6-ci-modes @ 2ebb51cb753230e03ab273d6470c3491e21a54d6)
+# https://github.com/microsoft/amplifier-bundle-modes/actions/runs/34156650604
+# captured 2026-09-07T19:44:10Z
+
+== JOB CONCLUSIONS ==
+success  Tests -- hooks-mode (py3.11)
+success  Tests -- hooks-mode (py3.13)
+success  Lint
+success  Bundle structure (YAML)
+success  Tests -- tool-mode (py3.13)
+success  Tests -- tool-mode (py3.11)
+
+== per-job pytest / ruff / structure result lines ==
+Tests -- hooks-mode (py3.11) | Run tests |  297 passed in 1.02s
+Tests -- hooks-mode (py3.13) | Run tests |  297 passed in 0.90s
+Lint | Lint (ruff, pinned) |  All checks passed!
+Bundle structure (YAML) | Parse bundle.md frontmatter and behaviors/*.yaml |  [36;1mprint(str(checked) + " YAML document(s) parsed.")[0m
+Bundle structure (YAML) | Parse bundle.md frontmatter and behaviors/*.yaml |  [36;1mprint("Bundle structure OK.")[0m
+Bundle structure (YAML) | Parse bundle.md frontmatter and behaviors/*.yaml |  2 YAML document(s) parsed.
+Bundle structure (YAML) | Parse bundle.md frontmatter and behaviors/*.yaml |  Bundle structure OK.
+Tests -- tool-mode (py3.13) | Run tests |  53 passed in 0.27s
+Tests -- tool-mode (py3.11) | Run tests |  53 passed in 0.33s
