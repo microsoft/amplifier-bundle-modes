@@ -198,7 +198,7 @@ async def test_failed_activation_no_b3_warning(
 
     # KEY: B3 warning must NOT fire on next provider request
     with caplog.at_level(logging.WARNING, logger="amplifier_module_hooks_mode"):
-        result = await hooks.handle_provider_request("provider:request", {})
+        await hooks.handle_provider_request("provider:request", {})
 
     b3_warnings = [
         r

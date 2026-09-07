@@ -1,0 +1,67 @@
+# RED PROOF -- run 34156524100 (scratch PR #31, branch ci/red-proof-j1e6 @ c3c15d45a085f065c006ff8dee95bb7ff57625b4)
+# https://github.com/microsoft/amplifier-bundle-modes/actions/runs/34156524100
+# captured 2026-09-07T19:42:02Z
+
+== JOB CONCLUSIONS ==
+failure  Bundle structure (YAML)
+success  Tests -- tool-mode (py3.11)
+failure  Lint
+failure  Tests -- hooks-mode (py3.13)
+success  Tests -- tool-mode (py3.13)
+failure  Tests -- hooks-mode (py3.11)
+
+== Tests -- hooks-mode (py3.11)  [GENUINE TEST FAILURE, suite executed] ==
+2026-09-07T19:41:25.9871840Z       Built amplifier-module-hooks-mode @ file:///home/runner/work/amplifier-bundle-modes/amplifier-bundle-modes/modules/hooks-mode
+2026-09-07T19:41:25.9951438Z       Built amplifier-module-tool-mode @ file:///home/runner/work/amplifier-bundle-modes/amplifier-bundle-modes/modules/tool-mode
+2026-09-07T19:41:26.3265349Z     Updated https://github.com/microsoft/amplifier-foundation (5f0f04b976f645fbc3b40e1f0acd6b4442ac6384)
+2026-09-07T19:41:26.3268176Z    Building amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@5f0f04b976f645fbc3b40e1f0acd6b4442ac6384
+2026-09-07T19:41:26.6120609Z       Built amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@5f0f04b976f645fbc3b40e1f0acd6b4442ac6384
+2026-09-07T19:41:26.6397568Z Installed 18 packages in 20ms
+2026-09-07T19:41:28.0611993Z ........F............................................................... [ 24%]
+2026-09-07T19:41:28.1766489Z ........................................................................ [ 48%]
+2026-09-07T19:41:28.2871407Z ........................................................................ [ 72%]
+2026-09-07T19:41:28.4426966Z ........................................................................ [ 96%]
+2026-09-07T19:41:28.5431229Z ..........                                                               [100%]
+2026-09-07T19:41:28.5431976Z =================================== FAILURES ===================================
+2026-09-07T19:41:28.5432699Z _____________________ test_ci_red_proof_deliberate_failure _____________________
+2026-09-07T19:41:28.5433477Z tests/test_ci_red_proof.py:24: in test_ci_red_proof_deliberate_failure
+2026-09-07T19:41:28.5434047Z     assert 1 == 2, (
+2026-09-07T19:41:28.5434959Z E   AssertionError: DELIBERATE FAILURE (ci/red-proof-j1e6): if you are reading this in a CI log, the test job is executing the real suite and gating on it.
+2026-09-07T19:41:28.5436132Z E   assert 1 == 2
+2026-09-07T19:41:28.5436546Z =========================== short test summary info ============================
+2026-09-07T19:41:28.5438307Z FAILED tests/test_ci_red_proof.py::test_ci_red_proof_deliberate_failure - AssertionError: DELIBERATE FAILURE (ci/red-proof-j1e6): if you are reading this in a CI log, the test job is executing the real suite and gating on it.
+2026-09-07T19:41:28.5440207Z assert 1 == 2
+2026-09-07T19:41:28.5440547Z 1 failed, 297 passed in 1.05s
+2026-09-07T19:41:28.6498466Z ##[error]Process completed with exit code 1.
+
+== Tests -- hooks-mode (py3.13) ==
+2026-09-07T19:41:28.3239705Z E   assert 1 == 2
+2026-09-07T19:41:28.3240003Z =========================== short test summary info ============================
+2026-09-07T19:41:28.3241058Z FAILED tests/test_ci_red_proof.py::test_ci_red_proof_deliberate_failure - AssertionError: DELIBERATE FAILURE (ci/red-proof-j1e6): if you are reading this in a CI log, the test job is executing the real suite and gating on it.
+2026-09-07T19:41:28.3242738Z assert 1 == 2
+2026-09-07T19:41:28.3242969Z 1 failed, 297 passed in 1.01s
+2026-09-07T19:41:28.4119094Z ##[error]Process completed with exit code 1.
+
+== Lint ==
+2026-09-07T19:41:23.9013910Z 18 |
+2026-09-07T19:41:23.9014396Z    - import json  # noqa-free on purpose: unused, so ruff F401 fires
+2026-09-07T19:41:23.9014985Z 19 |
+2026-09-07T19:41:23.9015276Z    |
+2026-09-07T19:41:23.9015440Z 
+2026-09-07T19:41:23.9015661Z Found 1 error.
+2026-09-07T19:41:23.9016040Z [*] 1 fixable with the `--fix` option.
+2026-09-07T19:41:23.9051475Z ##[error]Process completed with exit code 1.
+
+== Bundle structure (YAML) ==
+2026-09-07T19:41:28.1983124Z 2 YAML document(s) parsed.
+2026-09-07T19:41:28.1983333Z 
+2026-09-07T19:41:28.1983454Z FAILURES:
+2026-09-07T19:41:28.1983819Z   - behaviors/zz-ci-red-proof.yaml: while parsing a flow sequence
+2026-09-07T19:41:28.1984277Z   in "<unicode string>", line 4, column 9:
+2026-09-07T19:41:28.1984721Z       name: [unclosed
+2026-09-07T19:41:28.1984999Z             ^
+2026-09-07T19:41:28.1985288Z expected ',' or ']', but got '<stream end>'
+2026-09-07T19:41:28.1985671Z   in "<unicode string>", line 5, column 1:
+2026-09-07T19:41:28.1985990Z     
+2026-09-07T19:41:28.1986214Z     ^
+2026-09-07T19:41:28.2039655Z ##[error]Process completed with exit code 1.

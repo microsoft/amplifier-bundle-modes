@@ -31,7 +31,8 @@ enforcement: every `coordinator.hooks.emit(...)` call is wrapped in
 - **Payload:**
   ```python
   {
-      "mode": str,
+      "name": str,                  # canonical — hooks-mode reads this first
+      "mode": str,                  # legacy alias for "name", same value
       "description": str,
       "default_action": str,        # "block" | "allow"
       "safe_tools": list[str],
@@ -50,9 +51,11 @@ enforcement: every `coordinator.hooks.emit(...)` call is wrapped in
 - **Payload:**
   ```python
   {
-      "from_mode": str,
-      "to_mode": str,
-      "description": str,           # description of the new (to_mode) mode
+      "old": str,                   # canonical — hooks-mode reads this first
+      "new": str,                   # canonical — hooks-mode reads this first
+      "from_mode": str,             # legacy alias for "old", same value
+      "to_mode": str,               # legacy alias for "new", same value
+      "description": str,           # description of the new ("new") mode
       "default_action": str,
       "safe_tools": list[str],
       "warn_tools": list[str],
@@ -69,7 +72,10 @@ enforcement: every `coordinator.hooks.emit(...)` call is wrapped in
 - **When:** Active mode is deactivated via `mode(clear)`.
 - **Payload:**
   ```python
-  {"previous_mode": str}
+  {
+      "name": str,                  # canonical — hooks-mode reads this first
+      "previous_mode": str,         # legacy alias for "name", same value
+  }
   ```
 - **Not emitted when:** `mode(clear)` is called while no mode is active —
   there is nothing to clear.
