@@ -1,0 +1,13 @@
+# baseline: full suite at merge-base 3e2a9e6b0727844d5c1fefd42742a79bf466dd27 (BEFORE this lane's commits)
+--- modules/hooks-mode ---
+
+tests/test_token_cost_when_inactive.py:193: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_token_cost_when_inactive.py::test_inactive_session_provider_request_returns_continue
+1 failed, 251 passed in 0.37s
+--- modules/tool-mode ---
+
+tests/test_tool_mode.py:927: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_tool_mode.py::TestClearedEvent::test_clear_active_mode_emits_mode_cleared
+1 failed, 52 passed in 0.14s

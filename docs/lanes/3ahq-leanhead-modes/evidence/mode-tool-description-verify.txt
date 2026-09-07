@@ -1,0 +1,18 @@
+VERIFY-AND-SKIP: the `mode` tool description
+
+source (shipped): modules/tool-mode/amplifier_module_tool_mode/__init__.py  -> ModeTool.description
+v1 reference:     openai-evals-team-ci .amplifier/evaluation/probes/bji-lean-head/v1_tools.json ['mode']
+
+shipped chars: 198  sha256 02b7364bddf04e4c4c20dd42a0cc993e6faff35ae4b17ff4b153c0686d28c3bb
+v1      chars: 198  sha256 02b7364bddf04e4c4c20dd42a0cc993e6faff35ae4b17ff4b153c0686d28c3bb
+BYTE-IDENTICAL: True
+
+text:
+  "Manage runtime modes. Operations: 'set' (activate a mode), 'clear' (deactivate), 'list' (show available), 'current' (show active). Mode transitions may require confirmation depending on gate policy."
+
+RESULT: no change made, none warranted. This corroborates zc6t finding F3
+('identical-skip', 198 chars, fidelity-report.json entry [21]). Across the
+ecosystem ELEVEN tool descriptions actually change, not 13 -- no file was
+edited to make a count match. The description is now byte-PINNED by
+modules/hooks-mode/tests/test_lean_head_guardrail.py so it cannot drift away
+from v1 later; pinning it is the only change this artifact receives.
