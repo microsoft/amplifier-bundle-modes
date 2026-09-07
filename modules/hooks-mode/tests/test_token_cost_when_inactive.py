@@ -1,7 +1,9 @@
-"""Zero-token-cost-when-inactive tests.
+"""Bounded-token-cost-when-inactive tests.
 
-Design headline claim: when a mode is *never activated*, it contributes
-**nothing** to an in-flight session — no agents, no context, no skills.
+Design headline claim: when a mode is *never activated*, it contributes no
+agents, no skills, and no mode context to an in-flight session — only a single
+fixed "no mode is currently active" reminder, whose exact bytes are pinned in
+test 4 below.
 
 These tests enforce that invariant as CI-checked assertions.  Previously this
 was verified by the ad-hoc script ``token_measurement_check.py`` at module
@@ -22,9 +24,9 @@ Test catalogue
    — register_capability must never be called with ``runtime_skill_overlay``
      while no mode is active.
 
-4. ``test_inactive_session_provider_request_returns_continue``
-   — handle_provider_request must return HookResult(action="continue") with
-     no context_injection when active_mode is None.
+4. ``test_inactive_session_injects_only_the_mode_status_reminder``
+   — handle_provider_request must inject exactly the fixed mode-status
+     reminder (and nothing larger) when active_mode is None.
 """
 
 from __future__ import annotations
@@ -170,17 +172,42 @@ def test_inactive_session_has_no_runtime_skill_overlay_capability() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — provider request returns continue (no context injected)
+# Test 4 — provider request injects the fixed mode-status reminder, nothing more
 # ---------------------------------------------------------------------------
+
+# The exact block handle_provider_request injects when no mode is active.
+# Byte-for-byte, so that any growth of the inactive-session payload — a mode
+# body, a schema reference, a per-mode listing — fails this test rather than
+# silently costing every turn of every session that never activates a mode.
+EXPECTED_NO_MODE_BLOCK: str = (
+    '<system-reminder source="mode-status">\n'
+    "No mode is currently active. "
+    'Use `mode(operation="list")` to see available modes '
+    'or `mode(operation="set", name="<name>")` to activate one.\n'
+    "</system-reminder>"
+)
 
 
 @pytest.mark.asyncio
-async def test_inactive_session_provider_request_returns_continue() -> None:
-    """handle_provider_request must return HookResult(action='continue') when no mode is active.
+async def test_inactive_session_injects_only_the_mode_status_reminder() -> None:
+    """An inactive session must inject the fixed mode-status reminder and nothing else.
 
     Scenario: create coordinator with active_mode=None, call
-    handle_provider_request.  Assert the result has action='continue' and
-    no context_injection (i.e. zero tokens added to the provider request).
+    handle_provider_request.  Assert the result is exactly the small fixed
+    reminder block, marked ephemeral so it never accumulates.
+
+    Contract note: this asserted ``action == "continue"`` until commit 84e3054
+    ("fix(hooks-mode): inject positive mode-status reminder when no mode is
+    active") deliberately replaced silence with a positive signal, so the LLM
+    cannot make false claims about mode state across turns.  That commit
+    updated ``test_hooks.py`` and missed this file, leaving two tests in this
+    repo asserting contradictory contracts.  This one was the stale side; the
+    shipped contract is the one asserted here and in
+    ``test_hooks.py::test_no_active_mode_injects_status_reminder``.
+
+    The bound, not the absence, is what this file now guards: the cost of an
+    inactive session is this one constant block — currently 176 characters —
+    and equality catches any attempt to grow it.
     """
     from amplifier_module_hooks_mode import ModeDiscovery, ModeHooks
 
@@ -190,14 +217,28 @@ async def test_inactive_session_provider_request_returns_continue() -> None:
 
     result = await hooks.handle_provider_request("provider:request", {})
 
-    assert result.action == "continue", (
-        f"FAIL: handle_provider_request must return action='continue' when no mode "
-        f"is active, but got action={result.action!r}.  "
-        "An inactive session must never inject mode context tokens."
+    assert result.action == "inject_context", (
+        f"FAIL: handle_provider_request must return action='inject_context' when "
+        f"no mode is active, but got action={result.action!r}.  "
+        "The inactive session gets a positive 'no mode is active' signal."
     )
 
-    # Also assert no schema-reference content leaked through
     injected = getattr(result, "context_injection", None) or ""
+    assert injected == EXPECTED_NO_MODE_BLOCK, (
+        "FAIL: the inactive-session injection is no longer the fixed mode-status "
+        "reminder.  An inactive session must cost exactly this one constant block "
+        "and nothing more.\n"
+        f"  expected ({len(EXPECTED_NO_MODE_BLOCK)} chars): {EXPECTED_NO_MODE_BLOCK!r}\n"
+        f"  got      ({len(injected)} chars): {injected!r}"
+    )
+
+    assert getattr(result, "ephemeral", False) is True, (
+        "FAIL: the inactive-session reminder must be ephemeral, so it is not "
+        "accumulated into the conversation on every turn."
+    )
+
+    # Belt and braces: the schema reference is the largest thing that could leak
+    # here, and it is what the deleted token_measurement_check.py watched for.
     assert "Amplifier Mode Schema Reference" not in injected, (
         "FAIL: 'Amplifier Mode Schema Reference' leaked into inactive session context! "
         f"Injected context (first 200 chars): {injected[:200]!r}"
