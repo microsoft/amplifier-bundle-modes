@@ -72,6 +72,7 @@ class _Coordinator:
 
 class _Provider:
     instruction_layout_version = 1
+    instruction_layout_authority_v1 = True
 
 
 async def _add_human_input(context, assembly, input_id: str) -> dict[str, str]:
