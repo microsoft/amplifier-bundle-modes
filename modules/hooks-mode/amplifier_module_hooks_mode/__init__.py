@@ -16,6 +16,7 @@ import hashlib
 import logging
 import re
 import warnings
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -43,6 +44,10 @@ logger = logging.getLogger(__name__)
 # (`main.py:455`), so `/COSam` and `/cosam` are equivalent at lookup time.
 _SHORTCUT_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]*$"
 _SHORTCUT_RE = re.compile(_SHORTCUT_PATTERN)
+_INSTRUCTION_CAPABILITY = "context.instructions.v1"
+_INSTRUCTION_SOURCE_ID = "bundle-modes:hooks-mode"
+_INSTRUCTION_SOURCE_KEY = "current-mode"
+_INSTRUCTION_REFRESH_FAILURE = "mode instruction source refresh failed"
 
 
 class ModeListing(NamedTuple):
@@ -57,6 +62,15 @@ class ModeListing(NamedTuple):
     description: str
     source: str
     advertised: bool
+
+
+@dataclass(frozen=True)
+class _InstructionRecord:
+    """One immutable record returned by the v1 instruction source."""
+
+    key: str
+    content: str
+    placement: str = "before_human"
 
 
 def _is_valid_shortcut(value: str) -> bool:
@@ -549,11 +563,73 @@ class ModeHooks:
         self.discovery = discovery
         self.warned_tools: set[str] = set()
         self._last_context_hash: str | None = None
+        # The v1 assembly invokes callbacks in its own worker thread.  It must
+        # never reach coordinator state, mode discovery, a resolver, or I/O
+        # from there.  provider:request refreshes these immutable records on
+        # the normal hook event loop; the callback below only detaches them.
+        self._instruction_records: tuple[_InstructionRecord, ...] = ()
+        self._instruction_refresh_error: str | None = None
+        self._instruction_lease: Any = None
         self.infrastructure_tools: set[str] = (
             infrastructure_tools
             if infrastructure_tools is not None
             else {"mode", "todo"}
         )
+
+    def register_instruction_source(self, assembly: Any) -> None:
+        """Register the optional v1 source before request preparation begins."""
+        self._instruction_lease = assembly.register(
+            _INSTRUCTION_SOURCE_ID, self._instruction_snapshot
+        )
+
+    def close_instruction_source(self) -> None:
+        """Release the optional v1 source without assuming its assembly survives."""
+        lease = self._instruction_lease
+        self._instruction_lease = None
+        if lease is None:
+            return
+        try:
+            lease.close()
+        except Exception:
+            logger.debug("mode instruction source was already unavailable at cleanup")
+
+    def _instruction_snapshot(self, _scope: dict[str, Any]) -> list[dict[str, str]]:
+        """Return a detached current render snapshot without touching live state."""
+        if self._instruction_refresh_error is not None:
+            raise RuntimeError(self._instruction_refresh_error)
+        return deepcopy(
+            [
+                {
+                    "key": record.key,
+                    "content": record.content,
+                    "placement": record.placement,
+                }
+                for record in self._instruction_records
+            ]
+        )
+
+    def _v1_route_is_active(self) -> bool:
+        """Whether this request is assembled by the optional v1 capability."""
+        return (
+            self._instruction_lease is not None
+            and self._instruction_lease.route == "v1"
+        )
+
+    def _cache_instruction_context(self, context_block: str) -> None:
+        self._instruction_records = (
+            _InstructionRecord(
+                key=_INSTRUCTION_SOURCE_KEY,
+                content=context_block,
+            ),
+        )
+        self._instruction_refresh_error = None
+
+    def _cache_instruction_failure(self) -> None:
+        # Do not preserve the previous request's body after a required refresh
+        # fails.  The callback raises this content-free failure during v1
+        # assembly rather than silently replaying stale instruction text.
+        self._instruction_records = ()
+        self._instruction_refresh_error = _INSTRUCTION_REFRESH_FAILURE
 
     def _get_active_mode(self) -> ModeDefinition | None:
         """Get the currently active mode definition.
@@ -623,11 +699,12 @@ class ModeHooks:
     async def handle_provider_request(self, _event: str, _data: dict) -> "HookResult":
         """Inject mode context on every provider request.
 
-        Outer try/except (same shape as tool-mode's handler pattern): any unexpected
-        exception in the handler body is caught and logged; context injection fails open
-        (returns HookResult(action="continue")) so a handler bug never breaks a provider
-        request. Emits are bare awaits — coordinator.hooks.emit() is infallible at the
-        kernel level (hooks.rs:212-222), so per-emit guards are unnecessary.
+        Outer try/except (same shape as tool-mode's handler pattern): a legacy request
+        preserves the historical fail-open ``continue`` result.  A v1 source instead
+        fails closed and saves a content-free callback failure, so assembly cannot reuse
+        a prior request's body. Emits are bare awaits — coordinator.hooks.emit() is
+        infallible at the kernel level (hooks.rs:212-222), so per-emit guards are
+        unnecessary.
         """
         from amplifier_core.models import HookResult
 
@@ -663,13 +740,8 @@ class ModeHooks:
                     'or `mode(operation="set", name="<name>")` to activate one.\n'
                     "</system-reminder>"
                 )
-                return HookResult(
-                    action="inject_context",
-                    context_injection=no_mode_block,
-                    context_injection_role="system",
-                    ephemeral=True,
-                )
-            if not mode.context:
+                context_block = no_mode_block
+            elif not mode.context:
                 # Even if a mode is active but has no markdown body, we inject
                 # a minimal reminder so the LLM always has a positive signal
                 # for "I'm in mode X" rather than silent absence.
@@ -678,65 +750,65 @@ class ModeHooks:
                     f"MODE ACTIVE: {mode.name}\n"
                     f"</system-reminder>"
                 )
-                return HookResult(
-                    action="inject_context",
-                    context_injection=context_block,
-                    context_injection_role="system",
-                    ephemeral=True,
+            else:
+                # Resolve any @namespace:path mentions in the mode body before injection
+                resolved_context = self._resolve_mentions(mode.context)
+
+                # Inject files declared in contributes.context (runtime_context_overlay
+                # capability is populated by RuntimeOverlay.apply on activation).
+                # Injection order: contributed-context first, then mode body — all
+                # wrapped in one <system-reminder> block so the LLM sees a single
+                # coherent context chunk rather than interleaved fragments.
+                from amplifier_foundation import RUNTIME_CONTEXT_OVERLAY_CAPABILITY
+
+                contributed_content = ""
+                context_paths: list[str] = (
+                    self.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY)
+                    or []
+                )
+                if context_paths:
+                    # Build a newline-separated block of @-mentions; _resolve_mentions
+                    # replaces each standalone mention line with the file's content.
+                    path_block = "\n".join(str(p) for p in context_paths)
+                    resolved_paths = self._resolve_mentions(path_block)
+                    if resolved_paths.strip():
+                        contributed_content = resolved_paths.rstrip("\n") + "\n\n"
+
+                # Combine contributed context (if any) with the mode body
+                full_context = contributed_content + resolved_context
+
+                # Emit mode:context_injected only when the context has changed (hash-gated).
+                # Nested emit is safe: mode:context_injected is a different event name from
+                # provider:request, no handlers in this module listen on it, so there is no
+                # recursive dispatch path.
+                content_hash = hashlib.sha256(full_context.encode()).hexdigest()
+                if content_hash != self._last_context_hash:
+                    self._last_context_hash = content_hash
+                    await self.coordinator.hooks.emit(
+                        MODE_CONTEXT_INJECTED,
+                        {
+                            "mode": mode.name,
+                            "context_length": len(full_context),
+                            "content_hash": content_hash,
+                        },
+                    )
+
+                # Wrap context in system-reminder tags with explicit MODE ACTIVE banner
+                context_block = (
+                    f'<system-reminder source="mode-{mode.name}">\n'
+                    f"MODE ACTIVE: {mode.name}\n"
+                    f"You are CURRENTLY in {mode.name} mode. It is already active — "
+                    f'do NOT call mode(set, "{mode.name}") to re-activate it. '
+                    f"Follow the guidance below.\n\n"
+                    f"{full_context}\n"
+                    f"</system-reminder>"
                 )
 
-            # Resolve any @namespace:path mentions in the mode body before injection
-            resolved_context = self._resolve_mentions(mode.context)
-
-            # Inject files declared in contributes.context (runtime_context_overlay
-            # capability is populated by RuntimeOverlay.apply on activation).
-            # Injection order: contributed-context first, then mode body — all
-            # wrapped in one <system-reminder> block so the LLM sees a single
-            # coherent context chunk rather than interleaved fragments.
-            from amplifier_foundation import RUNTIME_CONTEXT_OVERLAY_CAPABILITY
-
-            contributed_content = ""
-            context_paths: list[str] = (
-                self.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY)
-                or []
-            )
-            if context_paths:
-                # Build a newline-separated block of @-mentions; _resolve_mentions
-                # replaces each standalone mention line with the file's content.
-                path_block = "\n".join(str(p) for p in context_paths)
-                resolved_paths = self._resolve_mentions(path_block)
-                if resolved_paths.strip():
-                    contributed_content = resolved_paths.rstrip("\n") + "\n\n"
-
-            # Combine contributed context (if any) with the mode body
-            full_context = contributed_content + resolved_context
-
-            # Emit mode:context_injected only when the context has changed (hash-gated).
-            # Nested emit is safe: mode:context_injected is a different event name from
-            # provider:request, no handlers in this module listen on it, so there is no
-            # recursive dispatch path.
-            content_hash = hashlib.sha256(full_context.encode()).hexdigest()
-            if content_hash != self._last_context_hash:
-                self._last_context_hash = content_hash
-                await self.coordinator.hooks.emit(
-                    MODE_CONTEXT_INJECTED,
-                    {
-                        "mode": mode.name,
-                        "context_length": len(full_context),
-                        "content_hash": content_hash,
-                    },
-                )
-
-            # Wrap context in system-reminder tags with explicit MODE ACTIVE banner
-            context_block = (
-                f'<system-reminder source="mode-{mode.name}">\n'
-                f"MODE ACTIVE: {mode.name}\n"
-                f"You are CURRENTLY in {mode.name} mode. It is already active — "
-                f'do NOT call mode(set, "{mode.name}") to re-activate it. '
-                f"Follow the guidance below.\n\n"
-                f"{full_context}\n"
-                f"</system-reminder>"
-            )
+            self._cache_instruction_context(context_block)
+            if self._v1_route_is_active():
+                # The assembly callback supplies the canonical SYSTEM record.
+                # Suppress only this module's legacy HookResult injection.
+                return HookResult(action="continue")
 
             return HookResult(
                 action="inject_context",
@@ -746,11 +818,17 @@ class ModeHooks:
             )
 
         except Exception:
+            self._cache_instruction_failure()
             logger.warning(
                 "handle_provider_request error for mode '%s'; skipping context injection",
                 self.coordinator.session_state.get("active_mode"),
                 exc_info=True,
             )
+            if self._v1_route_is_active():
+                return HookResult(
+                    action="deny",
+                    reason=_INSTRUCTION_REFRESH_FAILURE,
+                )
             return HookResult(action="continue")
 
     async def handle_tool_pre(self, _event: str, data: dict) -> "HookResult":
@@ -1054,7 +1132,7 @@ class ModeHooks:
 
 async def mount(
     coordinator: Any, config: dict[str, Any] | None = None
-) -> dict[str, Any]:
+) -> Any:
     """Mount the mode hooks module.
 
     Config options:
@@ -1144,6 +1222,9 @@ async def mount(
 
     # Create hooks instance
     hooks = ModeHooks(coordinator, discovery, infrastructure_tools=infrastructure_tools)
+    instruction_assembly = coordinator.get_capability(_INSTRUCTION_CAPABILITY)
+    if instruction_assembly is not None:
+        hooks.register_instruction_source(instruction_assembly)
 
     # Store hooks in session state for mode switching (to reset warnings)
     coordinator.session_state["mode_hooks"] = hooks
@@ -1189,11 +1270,10 @@ async def mount(
         "observability.events", "bundle-modes:hooks-mode", lambda: ALL_EVENTS
     )
 
-    return {
-        "name": "hooks-mode",
-        "version": "1.0.0",
-        "description": "Generic mode hooks for context injection and tool moderation",
-    }
+    async def cleanup() -> None:
+        hooks.close_instruction_source()
+
+    return cleanup
 
 
 # Exports for external use

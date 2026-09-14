@@ -88,6 +88,164 @@ class TestMountEventRegistration:
         )
 
 
+class _InstructionLease:
+    """Small v1 lease fake; its callback stays on the ModeHooks object."""
+
+    def __init__(self, route: str = "pending", close_error: Exception | None = None):
+        self.route = route
+        self.close_error = close_error
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _InstructionAssembly:
+    """Capture one source registration without importing context-simple at runtime."""
+
+    def __init__(self, lease: _InstructionLease):
+        self.lease = lease
+        self.registrations: list[tuple[str, object]] = []
+
+    def register(self, source_id: str, callback: object) -> _InstructionLease:
+        self.registrations.append((source_id, callback))
+        return self.lease
+
+
+class TestV1InstructionSource:
+    """Mode instructions use v1 only when its optional request route is active."""
+
+    @staticmethod
+    def _coordinator_with_assembly(
+        assembly: _InstructionAssembly, active_mode: str | None = None
+    ) -> MagicMock:
+        coordinator = _make_coordinator(active_mode)
+
+        def get_capability(name: str):
+            if name == "context.instructions.v1":
+                return assembly
+            return None
+
+        coordinator.get_capability = MagicMock(side_effect=get_capability)
+        coordinator.register_contributor = MagicMock()
+        return coordinator
+
+    @pytest.mark.asyncio
+    async def test_v1_refreshes_current_mode_and_suppresses_legacy_injection(
+        self, tmp_path: Path
+    ) -> None:
+        """A → B → off exposes only the freshly cached record on the v1 route."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "mode-a")
+        _create_mode_file(modes_dir, "mode-b")
+        lease = _InstructionLease(route="v1")
+        assembly = _InstructionAssembly(lease)
+        coordinator = self._coordinator_with_assembly(assembly)
+
+        from amplifier_module_hooks_mode import mount
+
+        cleanup = await mount(coordinator, {"search_paths": [str(modes_dir)]})
+        assert len(assembly.registrations) == 1
+        source_id, callback = assembly.registrations[0]
+        assert source_id == "bundle-modes:hooks-mode"
+        assert callable(callback)
+
+        coordinator.session_state["active_mode"] = "mode-a"
+        first = await coordinator.session_state["mode_hooks"].handle_provider_request(
+            "provider:request", {}
+        )
+        first_records = callback({})
+        assert first.action == "continue"
+        assert first.context_injection is None
+        assert first_records == [
+            {
+                "key": "current-mode",
+                "content": first_records[0]["content"],
+                "placement": "before_human",
+            }
+        ]
+        assert "You are in mode-a mode." in first_records[0]["content"]
+
+        # The assembly receives a deep-detached record, not mutable cache state.
+        first_records[0]["content"] = "tampered"
+        assert "tampered" not in callback({})[0]["content"]
+
+        coordinator.session_state["active_mode"] = "mode-b"
+        second = await coordinator.session_state["mode_hooks"].handle_provider_request(
+            "provider:request", {}
+        )
+        second_records = callback({})
+        assert second.action == "continue"
+        assert "You are in mode-b mode." in second_records[0]["content"]
+        assert "mode-a mode" not in second_records[0]["content"]
+
+        coordinator.session_state["active_mode"] = None
+        third = await coordinator.session_state["mode_hooks"].handle_provider_request(
+            "provider:request", {}
+        )
+        third_records = callback({})
+        assert third.action == "continue"
+        assert "No mode is currently active." in third_records[0]["content"]
+        assert "mode-b mode" not in third_records[0]["content"]
+
+        await cleanup()
+        assert lease.closed
+
+    @pytest.mark.asyncio
+    async def test_legacy_route_keeps_hook_result_and_v1_refresh_failure_denies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pending/legacy preserve injection; a v1 refresh never replays stale text."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        _create_mode_file(modes_dir, "v1-plan")
+        lease = _InstructionLease(route="legacy")
+        assembly = _InstructionAssembly(lease)
+        coordinator = self._coordinator_with_assembly(assembly, active_mode="v1-plan")
+
+        from amplifier_module_hooks_mode import mount
+
+        await mount(coordinator, {"search_paths": [str(modes_dir)]})
+        hooks = coordinator.session_state["mode_hooks"]
+        legacy = await hooks.handle_provider_request("provider:request", {})
+        assert legacy.action == "inject_context"
+        assert "You are in v1-plan mode." in legacy.context_injection
+
+        lease.route = "v1"
+        monkeypatch.setattr(
+            hooks, "_get_active_mode", MagicMock(side_effect=RuntimeError("boom"))
+        )
+        failed = await hooks.handle_provider_request("provider:request", {})
+        assert failed.action == "deny"
+        assert failed.reason == "mode instruction source refresh failed"
+
+        _source_id, callback = assembly.registrations[0]
+        with pytest.raises(RuntimeError, match="mode instruction source refresh failed"):
+            callback({})
+
+    @pytest.mark.asyncio
+    async def test_v1_source_cleanup_tolerates_an_already_closed_lease(
+        self, tmp_path: Path
+    ) -> None:
+        """Cleanup clears the local lease before attempting its idempotent close."""
+        modes_dir = tmp_path / "modes"
+        modes_dir.mkdir()
+        lease = _InstructionLease(close_error=RuntimeError("already closed"))
+        assembly = _InstructionAssembly(lease)
+        coordinator = self._coordinator_with_assembly(assembly)
+
+        from amplifier_module_hooks_mode import mount
+
+        cleanup = await mount(coordinator, {"search_paths": [str(modes_dir)]})
+        await cleanup()
+        await cleanup()
+        assert lease.closed
+        assert coordinator.session_state["mode_hooks"]._instruction_lease is None
+
+
 class TestHandlerMethodName:
     """Fix 1: The handler method should be named handle_provider_request."""
 
