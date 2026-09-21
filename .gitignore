@@ -1,1 +1,6 @@
 dist/
+
+# Interpreter and test caches are generated on each host.
+__pycache__/
+*.py[cod]
+.pytest_cache/
