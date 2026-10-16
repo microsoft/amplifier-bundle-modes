@@ -86,6 +86,7 @@ class ModeDefinition:
     contributes: dict[str, Any] = field(
         default_factory=dict
     )  # NEW (Phase 2): runtime overlay contributions
+    gate_policy: str | None = None  # Activation override; None inherits tool-mode config
 
 
 def parse_mode_file(file_path: Path) -> ModeDefinition | None:
@@ -224,6 +225,19 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
             resolved_name,
         )
 
+    gate_policy = mode_config.get("gate_policy")
+    if gate_policy is not None and (
+        not isinstance(gate_policy, str)
+        or gate_policy not in ("auto", "warn", "confirm")
+    ):
+        logger.warning(
+            "Mode file %s: invalid gate_policy %r; expected auto, warn, confirm, "
+            "or null. Requiring confirmation.",
+            file_path,
+            gate_policy,
+        )
+        gate_policy = "confirm"
+
     return ModeDefinition(
         name=resolved_name,
         description=mode_config.get("description", ""),
@@ -238,6 +252,7 @@ def parse_mode_file(file_path: Path) -> ModeDefinition | None:
         allow_clear=mode_config.get("allow_clear", True),
         advertised=mode_config.get("advertised", True),
         contributes=mode_config.get("contributes", {}) or {},
+        gate_policy=gate_policy,
     )
 
 

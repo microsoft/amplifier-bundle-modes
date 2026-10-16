@@ -99,12 +99,20 @@ enforcement: every `coordinator.hooks.emit(...)` call is wrapped in
 ### `mode:activation_gated`
 
 - **Owner:** `tool-mode`
-- **When:** Gate policy (`warn` or `confirm`) holds back an activation
-  pending user consent. Fires for both off → on and on → on attempts.
+- **When:** The effective activation gate (`mode.gate_policy` on the target mode,
+  otherwise tool-mode module configuration, with host `confirm` always retained)
+  is `warn` on its first attempt, or
+  `confirm` before requesting a human decision from the host approval service.
+  Fires for both off → on and on → on attempts. For `confirm`, every attempt
+  emits this event before approval; no `mode:activated`/`mode:changed` event or
+  contribution effect occurs unless the host returns `Allow` and the source
+  mode is still unchanged. Denial, missing service, errors, timeout, or an
+  unrecognized response leave the mode unchanged. Retrying requires a fresh
+  host decision, never automatic permission.
 - **Payload:**
   ```python
   {
-      "gate_policy": str,           # "warn" | "confirm"
+      "gate_policy": str,           # effective target activation policy: "warn" | "confirm"
       "target_mode": str,
       "description": str,
       "from_mode": str | None,      # None when transitioning from off
@@ -112,6 +120,10 @@ enforcement: every `coordinator.hooks.emit(...)` call is wrapped in
   ```
 - **Not emitted when:** Gate policy is `auto` (no user consent gate),
   or on the second `warn` retry that proceeds to activation.
+- **Clear compatibility:** Also emitted by the unchanged module-level clear
+  gate (`target_mode: None`, no `description`). Per-mode activation overrides
+  do not affect clearing; module-level `confirm` clear still denies without
+  requesting host approval.
 
 ### `mode:tool_blocked`
 

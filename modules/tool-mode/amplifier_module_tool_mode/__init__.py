@@ -6,6 +6,7 @@ Requires hooks-mode to be mounted (reads session_state["mode_discovery"]).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -58,10 +59,13 @@ class ModeTool:
         set     - Activate a mode (subject to gate policy)
         clear   - Deactivate the current mode
 
-    Gate policies (from config):
+    Activation gate policies (target mode override, otherwise module config):
         auto    - Agent changes freely
         warn    - First call denied with reminder; retry proceeds
-        confirm - Requires user approval via hooks-approval
+        confirm - Requires user approval via the host coordinator.approval_system
+
+    Clear retains the module-level gate policy; per-mode activation overrides
+    do not change clearing or the active mode's tools.confirm policy.
 
     Event emission pattern follows the delegate tool convention
     (amplifier-foundation/modules/tool-delegate): bare ``await hooks.emit(...)``
@@ -270,15 +274,18 @@ class ModeTool:
                         },
                     )
 
-            # Apply gate policy
-            if self.gate_policy == "warn":
+            # The target mode may override the module's activation policy.
+            gate_policy = getattr(mode_def, "gate_policy", None) or self.gate_policy
+            if self.gate_policy == "confirm":
+                gate_policy = "confirm"  # A target cannot bypass host-required approval.
+            if gate_policy == "warn":
                 warn_key = f"set:{name}"
                 if warn_key not in self._warned_transitions:
                     self._warned_transitions.add(warn_key)
                     await self.coordinator.hooks.emit(
                         MODE_ACTIVATION_GATED,
                         {
-                            "gate_policy": self.gate_policy,
+                            "gate_policy": gate_policy,
                             "target_mode": name,
                             "description": mode_def.description,
                             "from_mode": self.coordinator.session_state.get(
@@ -299,31 +306,55 @@ class ModeTool:
                         },
                     )
 
-            elif self.gate_policy == "confirm":
+            elif gate_policy == "confirm":
                 await self.coordinator.hooks.emit(
                     MODE_ACTIVATION_GATED,
                     {
-                        "gate_policy": self.gate_policy,
+                        "gate_policy": gate_policy,
                         "target_mode": name,
                         "description": mode_def.description,
                         "from_mode": self.coordinator.session_state.get("active_mode"),
                     },
                 )
-                return ToolResult(
-                    success=False,
-                    output={
-                        "status": "denied",
-                        "denied_mode": name,
-                        "user_instruction": (
-                            f"Inform the user: I'd like to switch to '{name}' mode "
-                            f"({mode_def.description}). You can switch manually with "
-                            f"/mode {name} or grant permission for me to manage "
-                            f"mode transitions."
-                        ),
-                    },
-                )
+                reason = None
+                try:
+                    approval_system = getattr(self.coordinator, "approval_system", None)
+                    if approval_system is None:
+                        reason = "Host approval service is unavailable."
+                    else:
+                        response = await asyncio.wait_for(
+                            approval_system.request_approval(
+                                prompt=f"Activate mode '{name}' ({mode_def.description})?",
+                                options=["Allow", "Deny"],
+                                timeout=60.0,
+                                default="deny",
+                            ),
+                            timeout=60.0,
+                        )
+                        if not isinstance(response, str) or response != "Allow":
+                            reason = "Mode activation was not approved by the user."
+                except Exception:
+                    logger.warning("Mode activation approval failed", exc_info=True)
+                    reason = "Host approval failed or timed out; mode activation denied."
 
-            # Gate passed (auto, or warn retry) - activate the mode
+                # Approval applies only to the transition whose source we checked.
+                if reason is None and (
+                    self.coordinator.session_state.get("active_mode") != current_mode_name
+                ):
+                    reason = "Active mode changed while awaiting approval; activation denied."
+
+                if reason is not None:
+                    return ToolResult(
+                        success=False,
+                        output={
+                            "status": "denied",
+                            "denied_mode": name,
+                            "reason": reason,
+                            "user_instruction": f"Inform the user: {reason}",
+                        },
+                    )
+
+            # Gate passed (auto, warn retry, or host approval) - activate the mode
             return await self._activate_mode(name, mode_def)
 
         except Exception:
@@ -392,7 +423,12 @@ class ModeTool:
         if hooks:
             hooks.reset_warnings()
 
-        logger.info("Mode activated: %s (gate_policy=%s)", name, self.gate_policy)
+        logger.info(
+            "Mode activated: %s (gate_policy=%s)",
+            name,
+            "confirm" if self.gate_policy == "confirm"
+            else getattr(mode_def, "gate_policy", None) or self.gate_policy,
+        )
 
         # Build restricted tools summary
         restricted: dict[str, list[str]] = {}

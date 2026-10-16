@@ -74,6 +74,23 @@ The `confirm` policy integrates with the approval hook system. When a tool is ma
 
 This is used by `careful` mode for write operations (`write_file`, `edit_file`, `bash`).
 
+### Mode Activation Gates
+
+Optional `mode.gate_policy` controls agent-initiated `mode(set)` activation of that
+target mode: `auto` activates immediately, `warn` denies once then permits retry,
+and `confirm` requires a human decision through the host's approval service
+(`coordinator.approval_system`). Omitted or `null` inherits the tool-mode module
+configuration (default `warn`). Host-configured `confirm` cannot be weakened by
+a target's `auto` or `warn`. Invalid values log a warning and require confirmation.
+
+With `confirm`, the mode remains inactive until the host returns `Allow`. Missing
+approval service, denial, unrecognized responses, errors, or a 60-second timeout
+return `status: denied` without activation events or contribution changes. Retrying
+never grants permission automatically; each request needs a fresh host decision.
+If the active mode changes while approval is pending, the stale request is denied.
+This activation setting does not change outgoing `allowed_transitions`, the
+module's clear policy, active-mode `tools.confirm`, visibility, or human slash commands.
+
 ## Creating Custom Modes
 
 ### Authoring with mode-design
@@ -171,6 +188,7 @@ All modes from all composed bundles appear in `/modes` and are activatable via `
 | `name` | Yes | Mode identifier |
 | `description` | No | Shown when mode activates |
 | `shortcut` | No (defaults to `name`) | Slash-command alias. Defaults to the mode's `name` (lowercased). Set to `false` to disable. Must match `^[a-z][a-z0-9_-]*$` after lowercasing; invalid values log a warning and register no alias. |
+| `gate_policy` | No | Activation override for agent `mode(set)`: `auto`, `warn`, or `confirm`. Omitted/`null` inherits tool-mode configuration. |
 | `tools.safe` | No | Tools always allowed |
 | `tools.warn` | No | Tools that warn once, then allow |
 | `tools.confirm` | No | Tools that require user approval |

@@ -121,6 +121,8 @@ mode:
   allowed_transitions: []           # List of mode names this mode can transition TO.
                                     # Absent = any transition allowed.
   allow_clear: true                 # Default: true. false = /mode off is rejected.
+  gate_policy: confirm              # Optional activation override: auto | warn | confirm.
+                                    # Omitted/null inherits tool-mode module config.
 
   # ─── Tool Policy ──────────────────────────────────────────────
   tools:
@@ -239,6 +241,34 @@ secure modes, demo environments with restricted mode graph navigation.
 **Caution.** `allow_clear: false` without `allowed_transitions` traps the user in the mode
 for the session lifetime. Always provide an escape route.
 
+### 2.8 `gate_policy`
+
+**Type:** `"auto"` | `"warn"` | `"confirm"` | null | absent
+
+**Default:** absent (inherit tool-mode module configuration, which defaults to `warn`)
+
+Controls agent-initiated `mode(set)` activation of this **target** mode. `auto`
+activates immediately; `warn` denies the first attempt and permits retry; `confirm`
+requests a human decision from the host's `coordinator.approval_system` service.
+Confirmation is required if either the target or module specifies `confirm`.
+Invalid types or values log a warning and require confirmation rather than falling
+through to a lower-precedence mode definition.
+
+For `confirm`, tool-mode awaits `request_approval(prompt, options=["Allow", "Deny"],
+timeout=60.0, default="deny")`, also bounded by `asyncio.wait_for(..., timeout=60.0)`.
+Only the string `Allow` permits activation. Missing service/provider, denial,
+unexpected responses, exceptions, and timeout return `success: false` with
+`status: denied` and a reason. No activation/change event or contribution effect
+occurs before approval; if the active mode changed while waiting, activation is
+denied. Caller-supplied approval fields and previous warnings are not approval.
+There is no approval cache or automatic retry permission: every attempt needs a
+fresh host decision.
+
+This field does not change outgoing `allowed_transitions`, `allow_clear`, the
+module-level clear gate, active-mode `tools.confirm`, listing visibility, or human
+slash-command activation. The module-level `confirm` clear gate still denies
+agent clearing; it does not request approval.
+
 ---
 
 ## 3. The `tools` Policy Block
@@ -292,8 +322,8 @@ Autonomous agents will simply retry.
 
 **`mode` tool** is never blocked by the mode's tool policy. An agent inside a restrictive
 mode can always call `mode(operation="list")` or `mode(operation="set", name="...")`. The
-`gate_policy: "warn"` in the tool-mode module configuration applies independently as a
-module-level default (not a per-mode control).
+tool-mode activation gate applies independently: the target mode's `gate_policy`
+overrides the module-level default (`warn`). See §2.8. Clear keeps the module-level gate.
 
 **`todo` tool** bypasses mode policy and is always available even when `default_action:
 block` and `todo` is not in `tools.safe`. Task list operations are meta-operations on the
@@ -1248,7 +1278,7 @@ or /[next-mode] to proceed to the next phase.
 Key functions:
 - `parse_mode_file(file_path)` (~lines 80–130) — Extracts YAML frontmatter, builds
   `ModeDefinition`. All frontmatter fields (`name`, `description`, `shortcut`,
-  `advertised`, `default_action`, `allowed_transitions`, `allow_clear`, `tools`,
+  `advertised`, `default_action`, `allowed_transitions`, `allow_clear`, `gate_policy`, `tools`,
   `contributes`) are parsed here.
 - `ModeDiscovery.list_modes(include_unadvertised: bool)` (~lines 310–340) — Iterates
   discovery paths, filters by `advertised` when `include_unadvertised=False`. The LLM's
@@ -1330,6 +1360,7 @@ mode:
   default_action: block|allow   # Default: block
   allowed_transitions: [...]    # Default: absent (any). List = restrict transitions
   allow_clear: <bool>           # Default: true. false = /mode off rejected
+  gate_policy: auto|warn|confirm # Optional activation override; absent/null inherits module
 
   tools:
     safe:    [...]              # Always allowed

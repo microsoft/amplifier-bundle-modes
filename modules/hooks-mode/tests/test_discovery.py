@@ -6,6 +6,7 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 
 from amplifier_module_hooks_mode import ModeDefinition, ModeDiscovery, parse_mode_file
 
@@ -168,6 +169,77 @@ class TestParseMode:
         assert result is not None
         assert result.allowed_transitions is None  # None = any transition OK
         assert result.allow_clear is True  # True = clear is allowed
+
+
+class TestActivationGatePolicy:
+    """The optional activation policy must never silently weaken a malformed gate."""
+
+    @pytest.mark.parametrize("policy", ["auto", "warn", "confirm"])
+    def test_parse_gate_policy(self, tmp_path: Path, policy: str) -> None:
+        mode_file = tmp_path / "guarded.md"
+        mode_file.write_text(
+            f"---\nmode:\n  name: guarded\n  gate_policy: {policy}\n---\nContext\n"
+        )
+        mode = parse_mode_file(mode_file)
+        assert mode is not None
+        assert mode.gate_policy == policy
+
+    @pytest.mark.parametrize("field", ["", "  gate_policy: null\n"])
+    def test_omitted_or_null_inherits_module_policy(
+        self, tmp_path: Path, field: str
+    ) -> None:
+        mode_file = tmp_path / "legacy.md"
+        mode_file.write_text(f"---\nmode:\n  name: legacy\n{field}---\nContext\n")
+        mode = parse_mode_file(mode_file)
+        assert mode is not None
+        assert mode.gate_policy is None
+        assert ModeDefinition(name="legacy").gate_policy is None
+
+    @pytest.mark.parametrize(
+        "invalid", ["true", "false", "0", "1.5", "[]", "{}", '""', "unknown", "Confirm"]
+    )
+    def test_invalid_policy_logs_and_requires_confirmation(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, invalid: str
+    ) -> None:
+        mode_file = tmp_path / "invalid.md"
+        mode_file.write_text(
+            f"---\nmode:\n  name: invalid\n  gate_policy: {invalid}\n---\nContext\n"
+        )
+        mode = parse_mode_file(mode_file)
+        assert mode is not None
+        assert mode.gate_policy == "confirm"
+        assert "gate_policy" in caplog.text
+        assert str(mode_file) in caplog.text
+        discovery = ModeDiscovery(search_paths=[tmp_path])
+        assert discovery.find("invalid").gate_policy == "confirm"
+        assert [entry.name for entry in discovery.list_modes()] == ["invalid"]
+        assert discovery.get_shortcuts() == {"invalid": "invalid"}
+
+    def test_invalid_override_cannot_fall_through_to_ungated_mode(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        bundle = tmp_path / "bundle"
+        project.mkdir()
+        bundle.mkdir()
+        for directory, policy in [(project, "Confirm"), (bundle, "auto")]:
+            (directory / "guarded.md").write_text(
+                f"---\nmode:\n  name: guarded\n  gate_policy: {policy}\n---\nContext\n"
+            )
+        discovery = ModeDiscovery(search_paths=[project, bundle])
+        assert discovery.find("guarded").gate_policy == "confirm"
+        discovery.list_modes()
+        assert discovery.find("guarded").gate_policy == "confirm"
+
+    def test_new_field_preserves_positional_constructor(self) -> None:
+        contributions = {"context": ["@example:context/reference.md"]}
+        mode = ModeDefinition(
+            "legacy", "description", "source", "alias", "body",
+            ["read_file"], ["bash"], ["edit_file"], ["deploy"],
+            "allow", ["next"], False, False, contributions,
+        )
+        assert mode.contributes is contributions
+        assert mode.advertised is False
+        assert mode.allow_clear is False
+        assert mode.gate_policy is None
 
 
 class TestModeDiscovery:

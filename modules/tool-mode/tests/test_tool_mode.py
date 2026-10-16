@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -88,6 +90,7 @@ def _make_coordinator(
     hooks.reset_warnings = MagicMock()
 
     coordinator = MagicMock()
+    coordinator.approval_system = None
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
     coordinator.session_state = {
@@ -256,7 +259,7 @@ class TestModeToolSet:
         assert result2.output["denied_mode"] == "review"
 
     @pytest.mark.asyncio
-    async def test_set_confirm_policy_always_denies(self, tmp_path: Path) -> None:
+    async def test_set_confirm_policy_without_approver_denies(self, tmp_path: Path) -> None:
         from amplifier_module_tool_mode import ModeTool
 
         coordinator = _make_coordinator(tmp_path, ["plan"])
@@ -265,8 +268,429 @@ class TestModeToolSet:
         result = await tool.execute({"operation": "set", "name": "plan"})
         assert result.success is False
         assert result.output["status"] == "denied"
-        # Confirm policy should instruct user about /mode command
+        # No host approval service: fail closed, never turn retry into permission.
         assert "user_instruction" in result.output
+        assert result.output["reason"]
+        assert coordinator.session_state["active_mode"] is None
+
+
+class _ApprovalSystem:
+    """Host-supplied async approval fake; no implicit truthy mock response."""
+
+    def __init__(
+        self,
+        response: object = "Deny",
+        *,
+        paused: bool = False,
+        error: Exception | None = None,
+    ) -> None:
+        self.response = response
+        self.error = error
+        self.calls: list[dict] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = False
+        if not paused:
+            self.release.set()
+
+    async def request_approval(
+        self, prompt: str, options: list[str], timeout: float, default: str
+    ) -> object:
+        self.calls.append(
+            {"prompt": prompt, "options": options, "timeout": timeout, "default": default}
+        )
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+@pytest.fixture
+def confirmed_coordinator(tmp_path: Path) -> MagicMock:
+    """Real discovery and lifecycle hooks, with a spy for contribution effects."""
+    from amplifier_module_hooks_mode import ModeHooks
+    from amplifier_module_tool_mode.events import MODE_ACTIVATED, MODE_CHANGED
+
+    coordinator = _make_coordinator(tmp_path, ["guarded", "plan", "review"])
+    (tmp_path / "modes" / "guarded.md").write_text(
+        "---\nmode:\n  name: guarded\n  description: Guarded mode\n"
+        "  gate_policy: confirm\n  tools:\n    confirm: [edit_file]\n"
+        "  contributes:\n    context: ['@example:context/reference.md']\n"
+        "---\nGuarded context.\n"
+    )
+    overlay = SimpleNamespace(
+        apply=AsyncMock(return_value=SimpleNamespace(success=True)),
+        revoke=AsyncMock(),
+    )
+    coordinator.session_state["mode_runtime_overlay"] = overlay
+    coordinator.session_state["require_approval_tools"] = {"bash"}
+    hooks = ModeHooks(coordinator, coordinator.session_state["mode_discovery"])
+
+    async def dispatch(event: str, data: dict) -> None:
+        if event == MODE_ACTIVATED:
+            await hooks.handle_mode_activated(event, data)
+        elif event == MODE_CHANGED:
+            await hooks.handle_mode_changed(event, data)
+
+    coordinator.hooks.emit.side_effect = dispatch
+    return coordinator
+
+
+class TestModeActivationApproval:
+    """Confirmation is a fresh host decision, never a warning or caller input."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("module_policy", ["auto", "warn", "confirm"])
+    @pytest.mark.parametrize("previous", [None, "plan"])
+    async def test_allow_activates_once_only_after_host_decision(
+        self, confirmed_coordinator: MagicMock, module_policy: str, previous: str | None
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.session_state["active_mode"] = previous
+        approval = _ApprovalSystem("Allow", paused=True)
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": module_policy}, coordinator=coordinator)
+        before = dict(coordinator.session_state)
+        overlay = before["mode_runtime_overlay"]
+        task = asyncio.create_task(tool.execute({"operation": "set", "name": "guarded"}))
+        try:
+            await asyncio.wait_for(approval.started.wait(), timeout=1.0)
+            assert not task.done()
+            assert coordinator.session_state == before
+            overlay.apply.assert_not_awaited()
+            overlay.revoke.assert_not_awaited()
+            coordinator.session_state["mode_hooks"].reset_warnings.assert_not_called()
+            calls = coordinator.hooks.emit.call_args_list
+            assert [c.args[0] for c in calls] == ["mode:activation_gated"]
+            assert calls[0].args[1]["gate_policy"] == "confirm"
+            assert calls[0].args[1]["from_mode"] == previous
+        finally:
+            approval.release.set()
+            result = await task
+
+        assert result.success is True
+        assert coordinator.session_state["active_mode"] == "guarded"
+        activation_events = [
+            c.args[0]
+            for c in coordinator.hooks.emit.call_args_list
+            if c.args[0] in ("mode:activated", "mode:changed")
+        ]
+        assert activation_events == ["mode:activated" if previous is None else "mode:changed"]
+        mode = before["mode_discovery"].find("guarded")
+        overlay.apply.assert_awaited_once_with("mode:guarded", mode.contributes)
+        if previous is None:
+            overlay.revoke.assert_not_awaited()
+        else:
+            overlay.revoke.assert_awaited_once_with("mode:plan")
+        coordinator.session_state["mode_hooks"].reset_warnings.assert_called_once()
+        assert len(approval.calls) == 1
+        request = approval.calls[0]
+        assert "guarded" in request["prompt"]
+        assert "Guarded mode" in request["prompt"]
+        assert request["options"] == ["Allow", "Deny"]
+        assert request["timeout"] == 60.0
+        assert request["default"] == "deny"
+        assert mode.confirm_tools == ["edit_file"]  # Tool confirmation is independent.
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("module_policy", ["auto", "warn"])
+    async def test_repeat_deny_never_activates_or_changes_contributions(
+        self, confirmed_coordinator: MagicMock, module_policy: str
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.session_state["active_mode"] = "plan"
+        approval = _ApprovalSystem("Deny")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": module_policy}, coordinator=coordinator)
+        tool._warned_transitions.add("set:guarded")  # Even an old warning cannot approve.
+        before = dict(coordinator.session_state)
+        for _ in range(2):
+            result = await tool.execute({"operation": "set", "name": "guarded"})
+            assert result.success is False
+            assert result.output["status"] == "denied"
+            assert result.output["reason"]
+            assert coordinator.session_state == before
+        assert len(approval.calls) == 2
+        assert tool._warned_transitions == {"set:guarded"}
+        assert [c.args[0] for c in coordinator.hooks.emit.call_args_list] == [
+            "mode:activation_gated",
+            "mode:activation_gated",
+        ]
+        before["mode_runtime_overlay"].apply.assert_not_awaited()
+        before["mode_runtime_overlay"].revoke.assert_not_awaited()
+        before["mode_hooks"].reset_warnings.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        ["Deny", "deny", "allow", "", None, True, {"approved": True}, object(), MagicMock()],
+    )
+    async def test_only_allow_string_authorizes(
+        self, confirmed_coordinator: MagicMock, response: object
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.approval_system = _ApprovalSystem(response)
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        result = await tool.execute({"operation": "set", "name": "guarded"})
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert result.output["reason"]
+        assert coordinator.session_state["active_mode"] is None
+        coordinator.session_state["mode_runtime_overlay"].apply.assert_not_awaited()
+        assert [c.args[0] for c in coordinator.hooks.emit.call_args_list] == [
+            "mode:activation_gated"
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider", ["absent", "none", "no_method"])
+    async def test_missing_service_or_provider_denies(
+        self, confirmed_coordinator: MagicMock, provider: str
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        if provider == "absent":
+            del coordinator.approval_system
+        elif provider == "no_method":
+            coordinator.approval_system = SimpleNamespace()
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        result = await tool.execute({"operation": "set", "name": "guarded"})
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert result.output["reason"]
+        assert coordinator.session_state["active_mode"] is None
+        coordinator.session_state["mode_runtime_overlay"].apply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [RuntimeError("provider failed"), TimeoutError()])
+    async def test_provider_exceptions_fail_closed(
+        self, confirmed_coordinator: MagicMock, error: Exception
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.approval_system = _ApprovalSystem(error=error)
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        before = dict(coordinator.session_state)
+        result = await tool.execute({"operation": "set", "name": "guarded"})
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert result.output["reason"]
+        assert coordinator.session_state == before
+        before["mode_runtime_overlay"].apply.assert_not_awaited()
+        assert [c.args[0] for c in coordinator.hooks.emit.call_args_list] == [
+            "mode:activation_gated"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_outer_timeout_bounds_a_provider_that_ignores_timeout(
+        self, confirmed_coordinator: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        real_wait_for = asyncio.wait_for
+        timeouts = []
+
+        async def fast_wait_for(awaitable, *, timeout):
+            timeouts.append(timeout)
+            return await real_wait_for(awaitable, timeout=0.01)
+
+        monkeypatch.setattr("amplifier_module_tool_mode.asyncio.wait_for", fast_wait_for)
+        coordinator = confirmed_coordinator
+        approval = _ApprovalSystem("Allow", paused=True)
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        result = await tool.execute({"operation": "set", "name": "guarded"})
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert result.output["reason"]
+        assert timeouts == [60.0]
+        assert approval.cancelled is True
+        assert coordinator.session_state["active_mode"] is None
+        coordinator.session_state["mode_runtime_overlay"].apply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_approval_is_ignored(
+        self, confirmed_coordinator: MagicMock
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        approval = _ApprovalSystem("Deny")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        result = await tool.execute(
+            {
+                "operation": "set", "name": "guarded", "approved": True,
+                "approval": "Allow", "confirmation": "Allow", "gate_policy": "auto",
+            }
+        )
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert len(approval.calls) == 1
+        assert coordinator.session_state["active_mode"] is None
+        assert set(tool.input_schema["properties"]) == {"operation", "name"}
+
+    @pytest.mark.asyncio
+    async def test_approval_is_not_cached(self, confirmed_coordinator: MagicMock) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        approval = _ApprovalSystem("Allow")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        assert (await tool.execute({"operation": "set", "name": "guarded"})).success is True
+        approval.response = "Deny"
+        result = await tool.execute({"operation": "set", "name": "guarded"})
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert len(approval.calls) == 2
+        assert tool._warned_transitions == set()
+        coordinator.session_state["mode_runtime_overlay"].apply.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mode_change_while_awaiting_approval_denies_stale_transition(
+        self, confirmed_coordinator: MagicMock
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        approval = _ApprovalSystem("Allow", paused=True)
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        task = asyncio.create_task(tool.execute({"operation": "set", "name": "guarded"}))
+        try:
+            await asyncio.wait_for(approval.started.wait(), timeout=1.0)
+            coordinator.session_state["active_mode"] = "plan"
+        finally:
+            approval.release.set()
+            result = await task
+        assert result.success is False
+        assert result.output["status"] == "denied"
+        assert "changed" in result.output["reason"].lower()
+        assert coordinator.session_state["active_mode"] == "plan"
+        coordinator.session_state["mode_runtime_overlay"].apply.assert_not_awaited()
+        assert [c.args[0] for c in coordinator.hooks.emit.call_args_list] == [
+            "mode:activation_gated"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_outgoing_restrictions_are_checked_before_approval(
+        self, confirmed_coordinator: MagicMock
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.session_state["active_mode"] = "plan"
+        coordinator.session_state["mode_discovery"].find("plan").allowed_transitions = []
+        approval = _ApprovalSystem("Allow")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        result = await tool.execute({"operation": "set", "name": "guarded"})
+        assert result.success is False
+        assert result.error["code"] == "transition_denied"
+        assert approval.calls == []
+        assert coordinator.session_state["active_mode"] == "plan"
+
+    @pytest.mark.asyncio
+    async def test_activation_gate_does_not_hide_modes_or_change_manual_discovery(
+        self, confirmed_coordinator: MagicMock
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        discovery = coordinator.session_state["mode_discovery"]
+        assert discovery.get_shortcuts()["guarded"] == "guarded"
+        assert "guarded" in [entry.name for entry in discovery.list_modes()]
+        approval = _ApprovalSystem("Allow")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "auto"}, coordinator=coordinator)
+        listing = await tool.execute({"operation": "list"})
+        assert "guarded" in [entry["name"] for entry in listing.output["modes"]]
+        discovery.find("guarded").advertised = False
+        assert (await tool.execute({"operation": "set", "name": "guarded"})).success is True
+        assert len(approval.calls) == 1  # Unadvertised modes use the same approval path.
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("module_policy", ["auto", "warn", "confirm"])
+    async def test_per_mode_gate_does_not_change_clear_policy(
+        self, confirmed_coordinator: MagicMock, module_policy: str
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.session_state["active_mode"] = "guarded"
+        approval = _ApprovalSystem("Allow")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": module_policy}, coordinator=coordinator)
+        result = await tool.execute({"operation": "clear"})
+        assert result.success is (module_policy == "auto")
+        if module_policy != "auto":
+            assert result.output["status"] == "denied"
+            retry = await tool.execute({"operation": "clear"})
+            assert retry.success is (module_policy == "warn")
+        assert approval.calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("policy", ["auto", "warn", "confirm"])
+    @pytest.mark.parametrize("legacy_without_attribute", [False, True])
+    async def test_ordinary_modes_inherit_module_policy(
+        self, tmp_path: Path, policy: str, legacy_without_attribute: bool
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = _make_coordinator(tmp_path, ["plan"])
+        discovery = coordinator.session_state["mode_discovery"]
+        mode = discovery.find("plan")
+        if legacy_without_attribute:
+            attributes = dict(vars(mode))
+            attributes.pop("gate_policy", None)
+            discovery._cache["plan"] = SimpleNamespace(**attributes)
+        approval = _ApprovalSystem("Allow")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": policy}, coordinator=coordinator)
+        result = await tool.execute({"operation": "set", "name": "plan"})
+        assert result.success is (policy != "warn")
+        if policy == "warn":
+            assert (await tool.execute({"operation": "set", "name": "plan"})).success is True
+        assert len(approval.calls) == (1 if policy == "confirm" else 0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target_policy", ["auto", "warn"])
+    async def test_target_auto_or_warn_cannot_bypass_module_confirm(
+        self, confirmed_coordinator: MagicMock, target_policy: str
+    ) -> None:
+        from amplifier_module_tool_mode import ModeTool
+
+        coordinator = confirmed_coordinator
+        coordinator.session_state["mode_discovery"].find("guarded").gate_policy = target_policy
+        approval = _ApprovalSystem("Deny")
+        coordinator.approval_system = approval
+        tool = ModeTool(config={"gate_policy": "confirm"}, coordinator=coordinator)
+        for _ in range(2):
+            result = await tool.execute({"operation": "set", "name": "guarded"})
+            assert result.success is False
+            assert result.output["status"] == "denied"
+            assert coordinator.session_state["active_mode"] is None
+        assert len(approval.calls) == 2
+        assert all(
+            call.args[1]["gate_policy"] == "confirm"
+            for call in coordinator.hooks.emit.call_args_list
+        )
+        approval.response = "Allow"
+        assert (await tool.execute({"operation": "set", "name": "guarded"})).success is True
+        assert len(approval.calls) == 3
 
 
 class TestModeToolClear:
@@ -490,6 +914,7 @@ def _make_coordinator_with_modes_dir(
     hooks.reset_warnings = MagicMock()
 
     coordinator = MagicMock()
+    coordinator.approval_system = None
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
     coordinator.session_state = {
