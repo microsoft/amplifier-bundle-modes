@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # No cache input. `enable-cache: true` keys the cache on **/uv.lock;
       # only modules/tool-mode commits one, and a sibling repo with none saw
@@ -65,7 +65,7 @@ jobs:
       # that proves nothing. (`enable-caching:` is not a valid input at all
       # and is silently ignored, which is worse.) These jobs install a handful
       # of small wheels; the cache was never worth a failure mode.
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
 
       - name: Lint (ruff, pinned)
         run: uvx ruff@0.16.6 check --isolated --select E4,E7,E9,F .
@@ -116,9 +116,9 @@ jobs:
         module: [hooks-mode, tool-mode]
         python-version: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
 
       - name: Run tests
         working-directory: modules/${{ matrix.module }}
@@ -154,9 +154,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
 
