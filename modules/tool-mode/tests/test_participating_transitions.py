@@ -420,11 +420,11 @@ async def test_external_contributor_exception_is_issuer_failure(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["activate", "change", "clear"])
+@pytest.mark.parametrize("phase", ["activate", "change", "change_revoke", "clear"])
 @pytest.mark.parametrize("failure", ["exception", "cancel", "false"])
 @pytest.mark.parametrize("notification", ["normal", "exception", "cancel"])
 async def test_participating_failure_diagnostics_are_safe_at_entry(
-    runtime, monkeypatch, phase, failure, notification
+    runtime, monkeypatch, caplog, phase, failure, notification
 ):
     """Observe BEFORE logger formatting/filtering and BEFORE native event emit.
 
@@ -440,7 +440,7 @@ async def test_participating_failure_diagnostics_are_safe_at_entry(
     original_error.__cause__ = ValueError(secret + "-cause")
     original_error.add_note(secret + "-note")
     overlay = runtime.hooks._get_or_create_overlay()
-    method = "revoke" if phase == "clear" else "apply"
+    method = "revoke" if phase in {"clear", "change_revoke"} else "apply"
     setattr(
         overlay, method,
         AsyncMock(return_value=SimpleNamespace(success=False, error=secret))
@@ -499,6 +499,8 @@ async def test_participating_failure_diagnostics_are_safe_at_entry(
         assert not (await change(runtime, operation, target)).success
     assert secret not in repr(events)
     assert secret not in repr(logs)
+    # Rust's tracing bridge can enter Python logging below Logger._log.
+    assert secret not in repr([record.__dict__ for record in caplog.records])
     assert all(not entry[-1].get("exc_info") and not entry[-1].get("stack_info") for entry in logs)
     assert len(tracked) == 1 and tracked[0].error is observed_errors[0]
     if failure != "false":
