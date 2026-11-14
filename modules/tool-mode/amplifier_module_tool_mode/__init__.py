@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 __amplifier_module_type__ = "tool"
 
+# Optional, host-owned, zero-argument synchronous context-manager factory.
+# Hosts enroll their actual mutation owners; this tool never manufactures a
+# graph receipt or imports an application/Foundation implementation.
+GRAPH_TRANSITION_CAPABILITY = "session.media.graph_transition"
+
 
 class ToolResult:
     """Minimal ToolResult for when amplifier_core is not available."""
@@ -172,6 +177,16 @@ class ModeTool:
 
     async def _handle_current(self, discovery: Any) -> ToolResult:
         """Show the currently active mode."""
+        failure = self.coordinator.session_state.get("mode_transition_failure")
+        if failure:
+            return ToolResult(
+                success=False,
+                error={
+                    "code": "transition_incomplete",
+                    "message": "A participating mode transition failed; runtime state requires recovery.",
+                },
+                output=failure,
+            )
         active = self.coordinator.session_state.get("active_mode")
         if not active:
             return ToolResult(
@@ -324,7 +339,7 @@ class ModeTool:
                 )
 
             # Gate passed (auto, or warn retry) - activate the mode
-            return await self._activate_mode(name, mode_def)
+            return await self._run_transition(name, mode_def)
 
         except Exception:
             logger.error("_handle_set failed unexpectedly", exc_info=True)
@@ -336,7 +351,80 @@ class ModeTool:
                 },
             )
 
-    async def _activate_mode(self, name: str, mode_def: Any) -> ToolResult:
+    async def _run_transition(self, name: str | None, mode_def: Any = None) -> ToolResult:
+        """Enter the host boundary before effects, leave before error conversion.
+
+        Only absence preserves the native lane. A present malformed capability,
+        refusal, body failure, cancellation or exit failure never retries outside
+        the boundary. The host owns receipt invalidation, not this tool.
+        """
+        getter = getattr(self.coordinator, "get_capability", None)
+        factory = getter(GRAPH_TRANSITION_CAPABILITY) if getter is not None else None
+        state = self.coordinator.session_state
+        if state.get("mode_transition_failure"):
+            raise RuntimeError("A failed participating mode transition requires host recovery")
+        if factory is None:
+            if name is None:
+                return await self._clear_mode()
+            return await self._activate_mode(name, mode_def)
+        if not callable(factory):
+            raise TypeError(f"{GRAPH_TRANSITION_CAPABILITY} must be callable")
+        hooks = self._get_hooks()
+        if not callable(getattr(hooks, "track_transition", None)):
+            raise TypeError("Participating mode transitions require matching hooks-mode")
+
+        previous = state.get("active_mode")
+        entered = False
+        body_error = None
+        try:
+            with factory():
+                entered = True
+                try:
+                    if name is None:
+                        result = await self._clear_mode(participating=True)
+                    else:
+                        result = await self._activate_mode(name, mode_def, participating=True)
+                except BaseException as exc:
+                    body_error = exc
+                    raise
+            # A broken host context must not suppress a failed/cancelled body
+            # and turn an uncompleted operation into a successful ToolResult.
+            if body_error is not None:
+                raise body_error
+            if not entered:
+                raise RuntimeError("Host transition did not enter")
+            return result
+        except BaseException as exc:
+            if entered:
+                # Restore bookkeeping, NOT the old graph or contributions. Keep
+                # an explicit failure latch: partial contributions may remain,
+                # so neither current() nor moderation may claim a usable mode.
+                state["active_mode"] = previous
+                state["mode_transition_failure"] = {
+                    "previous_mode": previous,
+                    "target_mode": name,
+                    "message": "Transition failed or was cancelled; contributions may be partial.",
+                }
+            if body_error is not None and exc is not body_error:
+                raise body_error from exc
+            raise
+
+    async def _emit_transition(self, event: str, payload: dict, participating: bool) -> None:
+        if not participating:
+            await self.coordinator.hooks.emit(event, payload)
+            return
+        # Only a serializable operation ID crosses the event bridge. The
+        # modes-owned tracker retains the outcome even if Core swallows a hook
+        # exception or copies/serializes the event payload.
+        with self._get_hooks().track_transition(event) as transition:
+            await self.coordinator.hooks.emit(
+                event, {**payload, "transition_id": transition.id}
+            )
+            transition.verify()
+
+    async def _activate_mode(
+        self, name: str, mode_def: Any, *, participating: bool = False
+    ) -> ToolResult:
         """Activate a mode: emit event, update session state, reset warnings, return info.
 
         Emit-before-state-change pattern (matching delegate tool): the event fires
@@ -384,7 +472,7 @@ class ModeTool:
         # Emit FIRST (before state change) — bare await, delegate tool pattern.
         # If this raises, the caller's outer try/except handles it and state is
         # never mutated, keeping observable state consistent with the return value.
-        await self.coordinator.hooks.emit(event, payload)
+        await self._emit_transition(event, payload, participating)
 
         # Apply state changes only after emit succeeds
         self.coordinator.session_state["active_mode"] = name
@@ -513,37 +601,7 @@ class ModeTool:
                     },
                 )
 
-            # Gate passed — emit FIRST (before state change), delegate tool pattern.
-            # If this raises, the caller's outer try/except handles it and state is
-            # never mutated, keeping observable state consistent with the return value.
-            if current_mode_name is not None:
-                await self.coordinator.hooks.emit(
-                    MODE_CLEARED,
-                    {
-                        "name": current_mode_name,  # canonical key — handlers read this first
-                        "previous_mode": current_mode_name,  # legacy compat
-                    },
-                )
-
-            # Apply state changes only after emit succeeds
-            previous = current_mode_name
-            self.coordinator.session_state["active_mode"] = None
-            hooks = self._get_hooks()
-            if hooks:
-                hooks.reset_warnings()
-            # Reset gate warning memory so next set requires fresh confirmation
-            self._warned_transitions.clear()
-
-            logger.info("Mode cleared (was: %s)", previous)
-
-            return ToolResult(
-                success=True,
-                output={
-                    "status": "cleared",
-                    "previous_mode": previous,
-                    "message": "Mode deactivated. All tools are now unrestricted.",
-                },
-            )
+            return await self._run_transition(None)
 
         except Exception:
             logger.error("_handle_clear failed unexpectedly", exc_info=True)
@@ -554,6 +612,29 @@ class ModeTool:
                     "message": "An unexpected error occurred during mode clear.",
                 },
             )
+
+    async def _clear_mode(self, *, participating: bool = False) -> ToolResult:
+        previous = self.coordinator.session_state.get("active_mode")
+        if previous is not None:
+            await self._emit_transition(
+                MODE_CLEARED,
+                {"name": previous, "previous_mode": previous},
+                participating,
+            )
+        self.coordinator.session_state["active_mode"] = None
+        hooks = self._get_hooks()
+        if hooks:
+            hooks.reset_warnings()
+        self._warned_transitions.clear()
+        logger.info("Mode cleared (was: %s)", previous)
+        return ToolResult(
+            success=True,
+            output={
+                "status": "cleared",
+                "previous_mode": previous,
+                "message": "Mode deactivated. All tools are now unrestricted.",
+            },
+        )
 
 
 async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
