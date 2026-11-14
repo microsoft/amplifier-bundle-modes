@@ -291,7 +291,7 @@ async def test_operation_tracker_rejects_nonmatching_completion(runtime, kind):
     hooks = runtime.hooks
     event = "mode:activated"
     payload = {"name": "alpha"}
-    with hooks.track_transition(event) as operation:
+    with hooks.track_transition(event, payload=payload) as operation:
         payload["transition_id"] = operation.id
         if kind == "duplicate":
             await hooks.handle_mode_activated(event, payload)
@@ -307,7 +307,7 @@ async def test_operation_tracker_rejects_nonmatching_completion(runtime, kind):
     if kind == "stale":
         with pytest.raises(RuntimeError, match="expired"):
             await hooks.handle_mode_activated(event, payload)
-        with hooks.track_transition(event) as next_operation:
+        with hooks.track_transition(event, payload=payload) as next_operation:
             assert next_operation.id != operation.id
             with pytest.raises(RuntimeError, match="did not complete"):
                 next_operation.verify()
@@ -335,6 +335,36 @@ async def test_completion_is_bound_to_original_mode_target(runtime):
         with pytest.raises(RuntimeError, match="target does not match"):
             operation.verify()
     assert runtime.session.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["activate", "change", "clear"])
+async def test_modified_event_cannot_retarget_the_gated_operation(runtime, phase):
+    if phase != "activate":
+        assert (await change(runtime)).success
+    event = {
+        "activate": "mode:activated", "change": "mode:changed", "clear": "mode:cleared"
+    }[phase]
+
+    def rewrite(event, data):
+        fields = {"old": "beta", "from_mode": "beta"} if phase == "change" else {
+            "name": "beta",
+            **({"mode": "beta"} if phase == "activate" else {"previous_mode": "beta"}),
+        }
+        return HookResult(action="modify", data={**data, **fields})
+
+    with runtime.graph.transition() as successor:
+        runtime.graph = successor
+        successor.participant("host.mode").hooks.register(
+            event, rewrite, priority=-50, name="rewrite-gated-mode"
+        )
+    old = runtime.bridge.graph_receipt
+    operation, target = ("clear", None) if phase == "clear" else ("set", "beta" if phase == "change" else "alpha")
+    assert not (await change(runtime, operation, target)).success
+    assert not runtime.bridge.validate_receipt(old)
+    assert not runtime.bridge.validate_receipt(runtime.bridge.graph_receipt)
+    contexts = runtime.session.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY)
+    assert contexts == (None if phase == "activate" else ["alpha.txt"])
 
 
 @pytest.mark.asyncio
