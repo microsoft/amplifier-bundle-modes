@@ -16,9 +16,11 @@ import hashlib
 import logging
 import re
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
+from uuid import uuid4
 
 import yaml
 
@@ -536,6 +538,25 @@ class ModeDiscovery:
         self._cache.clear()
 
 
+@dataclass
+class ModeTransition:
+    """One operation's modes-owned acknowledgement, not a host graph receipt."""
+
+    event: str
+    id: str = field(default_factory=lambda: uuid4().hex)
+    started: bool = False
+    completed: bool = False
+    error: BaseException | None = None
+    identity: dict[str, Any] = field(default_factory=dict)
+
+    def verify(self) -> None:
+        """Fail inside the host boundary even when Core swallowed a callback."""
+        if self.error is not None:
+            raise self.error
+        if not self.started or not self.completed:
+            raise RuntimeError("Mode contribution callback did not complete")
+
+
 class ModeHooks:
     """Generic mode enforcement via hooks."""
 
@@ -549,6 +570,7 @@ class ModeHooks:
         self.discovery = discovery
         self.warned_tools: set[str] = set()
         self._last_context_hash: str | None = None
+        self._transitions: dict[str, ModeTransition] = {}
         self.infrastructure_tools: set[str] = (
             infrastructure_tools
             if infrastructure_tools is not None
@@ -632,6 +654,19 @@ class ModeHooks:
         from amplifier_core.models import HookResult
 
         try:
+            if self.coordinator.session_state.get("mode_transition_failure"):
+                return HookResult(
+                    action="inject_context",
+                    context_injection=(
+                        '<system-reminder source="mode-status">\n'
+                        "A participating mode transition failed or was cancelled. "
+                        "Runtime contributions may be partial; host recovery is required. "
+                        "Do not claim the previous or requested mode is usable.\n"
+                        "</system-reminder>"
+                    ),
+                    context_injection_role="system",
+                    ephemeral=True,
+                )
             mode = self._get_active_mode()
             if not mode:
                 # B3 guard: detect session-resume state loss.
@@ -766,6 +801,13 @@ class ModeHooks:
         from amplifier_core.models import HookResult
 
         try:
+            if self.coordinator.session_state.get("mode_transition_failure"):
+                if data.get("tool_name", "") in self.infrastructure_tools:
+                    return HookResult(action="continue")
+                return HookResult(
+                    action="deny",
+                    reason="A failed participating mode transition requires host recovery.",
+                )
             mode = self._get_active_mode()
             if not mode:
                 return HookResult(action="continue")
@@ -846,6 +888,113 @@ class ModeHooks:
             )
             return HookResult(action="deny")
 
+    @contextmanager
+    def track_transition(self, event: str, *, payload: dict):
+        """Track a single actual lifecycle dispatch across Core's event bridge.
+
+        Hosts/tools add ``transition_id=transition.id`` to the ordinary event
+        payload, await its emit and call ``transition.verify()`` BEFORE leaving
+        their host-owned transition. Only a string crosses the event bridge;
+        callbacks acknowledge this operation in this ModeHooks instance.
+        The original ``payload`` binds the acknowledgement to its exact
+        mode-name fields, not a rewritten target carrying the same ID.
+        Absence of a callback, duplicate dispatch and stale IDs fail closed.
+        This API neither opens nor qualifies a host graph transition.
+        """
+        if event not in {"mode:activated", "mode:changed", "mode:cleared"}:
+            raise ValueError("Not a mode lifecycle event")
+        transition = ModeTransition(event)
+        transition.identity = self._transition_identity(payload)
+        self._transitions[transition.id] = transition
+        try:
+            yield transition
+        finally:
+            self._transitions.pop(transition.id, None)
+
+    @staticmethod
+    def _transition_identity(data: dict) -> dict:
+        return {
+            key: data[key] for key in (
+                "name", "mode", "old", "new", "from_mode", "to_mode", "previous_mode"
+            ) if key in data
+        }
+
+    async def _handle_tracked_transition(self, event: str, data: dict) -> "HookResult":
+        """Strict contribution path; native untracked lifecycle stays unchanged."""
+        from amplifier_core.models import HookResult
+        from .events import MODE_ACTIVATION_FAILED, MODE_TRANSITION_COMPLETED
+
+        transition = self._transitions.get(data.get("transition_id"))
+        if transition is None:
+            raise RuntimeError("Unknown or expired mode transition")
+        if transition.event != event or transition.started:
+            transition.error = RuntimeError("Mismatched or duplicate mode callback")
+            raise transition.error
+        if transition.identity != self._transition_identity(data):
+            transition.error = RuntimeError("Mode callback target does not match its operation")
+            raise transition.error
+        transition.started = True
+        changing = event == "mode:changed"
+        target = (
+            (data.get("new") or data.get("to_mode")) if changing
+            else (data.get("name") or data.get("mode") or data.get("previous_mode"))
+        )
+        try:
+            if not target:
+                raise ValueError("Mode lifecycle event is missing its mode name")
+            if event in {"mode:changed", "mode:cleared"}:
+                old = (data.get("old") or data.get("from_mode")) if changing else target
+                if not old:
+                    raise ValueError("Mode change is missing its previous mode")
+                result = await self._get_or_create_overlay().revoke(f"mode:{old}")
+                if result.success is not True:
+                    raise RuntimeError("Mode contribution revoke failed")
+            if event != "mode:cleared":
+                definition = self.discovery.find(target)
+                if definition is None:
+                    raise ValueError(f"Mode '{target}' was not found")
+                if definition.contributes:
+                    result = await self._get_or_create_overlay().apply(
+                        f"mode:{target}", definition.contributes
+                    )
+                    if result.success is not True:
+                        raise RuntimeError("Mode contribution apply failed")
+            await self.coordinator.hooks.emit(
+                MODE_TRANSITION_COMPLETED,
+                {"mode": target, "phase": event.split(":")[1]},
+            )
+            if event == "mode:cleared":
+                self._discard_overlay_if_empty()
+            transition.completed = True
+        except BaseException as exc:
+            transition.error = exc
+            # Never discard an overlay after a failed/uncertain operation:
+            # empty scope claims do not prove all contributions rolled back.
+            if isinstance(exc, Exception):
+                try:
+                    await self.coordinator.hooks.emit(
+                        MODE_ACTIVATION_FAILED,
+                        {
+                            "code": "mode_transition_failed",
+                            "error": "Participating mode contribution failed.",
+                        },
+                    )
+                except BaseException:
+                    # Secondary notification failures must not replace the
+                    # original object or expose its chain/notes to logging.
+                    try:
+                        logger.warning(
+                            "Could not emit participating mode failure notification",
+                            exc_info=None, stack_info=False,
+                        )
+                    except BaseException:
+                        pass
+            # Core logs callback exceptions before a host can sanitize them.
+            # Keep the original only in the tracker; the caller's verify()
+            # raises that same object INSIDE the host transition boundary.
+            return HookResult(action="continue")
+        return HookResult(action="continue")
+
     def _get_or_create_overlay(self) -> Any:
         """Get the singleton RuntimeOverlay for this session, creating it lazily.
 
@@ -887,6 +1036,8 @@ class ModeHooks:
           Legacy:     data["mode"]        (tool-mode original key, kept for compat)
           Fallback:   session_state["active_mode"]  (set by tool-mode after emit)
         """
+        if "transition_id" in data:
+            return await self._handle_tracked_transition(_event, data)
         from amplifier_core.models import HookResult
         from .events import MODE_ACTIVATION_FAILED, MODE_TRANSITION_COMPLETED
 
@@ -944,6 +1095,8 @@ class ModeHooks:
         Either may be falsy — defensive code costs nothing. On any error, emit
         mode:activation_failed and continue.
         """
+        if "transition_id" in data:
+            return await self._handle_tracked_transition(_event, data)
         from amplifier_core.models import HookResult
         from .events import MODE_ACTIVATION_FAILED, MODE_TRANSITION_COMPLETED
 
@@ -988,6 +1141,8 @@ class ModeHooks:
         On any error, emit mode:activation_failed and continue (revocation is
         best-effort — leftover state is far better than a broken transition).
         """
+        if "transition_id" in data:
+            return await self._handle_tracked_transition(_event, data)
         from amplifier_core.models import HookResult
         from .events import MODE_ACTIVATION_FAILED, MODE_TRANSITION_COMPLETED
 

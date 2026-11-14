@@ -90,6 +90,7 @@ def _make_coordinator(
     coordinator = MagicMock()
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
+    coordinator.get_capability.return_value = None
     coordinator.session_state = {
         "active_mode": active_mode,
         "mode_discovery": discovery,
@@ -492,6 +493,7 @@ def _make_coordinator_with_modes_dir(
     coordinator = MagicMock()
     coordinator.hooks = MagicMock()
     coordinator.hooks.emit = AsyncMock()
+    coordinator.get_capability.return_value = None
     coordinator.session_state = {
         "active_mode": active_mode,
         "mode_discovery": discovery,
