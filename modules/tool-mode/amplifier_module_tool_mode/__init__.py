@@ -257,6 +257,7 @@ class ModeTool:
         # Outer try/except (delegate tool pattern): catches any unexpected failure
         # including rare bridge/serialization errors from hooks.emit(). Individual
         # emits are bare awaits — no per-emit wrapping.
+        diagnostics = {"participating": False}
         try:
             # Check allowed_transitions from current mode (if any)
             current_mode_name = self.coordinator.session_state.get("active_mode")
@@ -347,10 +348,15 @@ class ModeTool:
                 )
 
             # Gate passed (auto, or warn retry) - activate the mode
-            return await self._run_transition(name, mode_def)
+            return await self._run_transition(name, mode_def, diagnostics=diagnostics)
 
         except Exception:
-            logger.error("_handle_set failed unexpectedly", exc_info=True)
+            if diagnostics["participating"]:
+                logger.error(
+                    "Participating mode set failed.", exc_info=None, stack_info=False
+                )
+            else:
+                logger.error("_handle_set failed unexpectedly", exc_info=True)
             return ToolResult(
                 success=False,
                 error={
@@ -359,16 +365,26 @@ class ModeTool:
                 },
             )
 
-    async def _run_transition(self, name: str | None, mode_def: Any = None) -> ToolResult:
+    async def _run_transition(
+        self, name: str | None, mode_def: Any = None, *,
+        diagnostics: dict[str, bool] | None = None,
+    ) -> ToolResult:
         """Enter the host boundary before effects, leave before error conversion.
 
         Only absence preserves the native lane. A present malformed capability,
         refusal, body failure, cancellation or exit failure never retries outside
         the boundary. The host owns receipt invalidation, not this tool.
         """
+        if diagnostics is not None:
+            # Capability lookup/refusal errors are also untrusted diagnostics.
+            diagnostics["participating"] = True
         getter = getattr(self.coordinator, "get_capability", None)
         factory = getter(GRAPH_TRANSITION_CAPABILITY) if getter is not None else None
         state = self.coordinator.session_state
+        if diagnostics is not None:
+            diagnostics["participating"] = (
+                factory is not None or bool(state.get("mode_transition_failure"))
+            )
         if state.get("mode_transition_failure"):
             raise RuntimeError("A failed participating mode transition requires host recovery")
         if factory is None:
@@ -521,6 +537,7 @@ class ModeTool:
         # Outer try/except (delegate tool pattern): catches any unexpected failure
         # including rare bridge/serialization errors from hooks.emit(). Individual
         # emits are bare awaits — no per-emit wrapping.
+        diagnostics = {"participating": False}
         try:
             # Check allow_clear from current mode (if any)
             if current_mode_name:
@@ -611,10 +628,15 @@ class ModeTool:
                     },
                 )
 
-            return await self._run_transition(None)
+            return await self._run_transition(None, diagnostics=diagnostics)
 
         except Exception:
-            logger.error("_handle_clear failed unexpectedly", exc_info=True)
+            if diagnostics["participating"]:
+                logger.error(
+                    "Participating mode clear failed.", exc_info=None, stack_info=False
+                )
+            else:
+                logger.error("_handle_clear failed unexpectedly", exc_info=True)
             return ToolResult(
                 success=False,
                 error={

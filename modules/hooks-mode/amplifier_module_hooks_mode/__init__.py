@@ -948,7 +948,7 @@ class ModeHooks:
                     raise ValueError("Mode change is missing its previous mode")
                 result = await self._get_or_create_overlay().revoke(f"mode:{old}")
                 if result.success is not True:
-                    raise RuntimeError(f"Mode contribution revoke failed: {result.error}")
+                    raise RuntimeError("Mode contribution revoke failed")
             if event != "mode:cleared":
                 definition = self.discovery.find(target)
                 if definition is None:
@@ -958,7 +958,7 @@ class ModeHooks:
                         f"mode:{target}", definition.contributes
                     )
                     if result.success is not True:
-                        raise RuntimeError(f"Mode contribution apply failed: {result.error}")
+                        raise RuntimeError("Mode contribution apply failed")
             await self.coordinator.hooks.emit(
                 MODE_TRANSITION_COMPLETED,
                 {"mode": target, "phase": event.split(":")[1]},
@@ -973,11 +973,26 @@ class ModeHooks:
             if isinstance(exc, Exception):
                 try:
                     await self.coordinator.hooks.emit(
-                        MODE_ACTIVATION_FAILED, {"mode": target, "error": str(exc)}
+                        MODE_ACTIVATION_FAILED,
+                        {
+                            "code": "mode_transition_failed",
+                            "error": "Participating mode contribution failed.",
+                        },
                     )
-                except Exception:
-                    logger.warning("Could not emit mode failure notification", exc_info=True)
-            raise
+                except BaseException:
+                    # Secondary notification failures must not replace the
+                    # original object or expose its chain/notes to logging.
+                    try:
+                        logger.warning(
+                            "Could not emit participating mode failure notification",
+                            exc_info=None, stack_info=False,
+                        )
+                    except BaseException:
+                        pass
+            # Core logs callback exceptions before a host can sanitize them.
+            # Keep the original only in the tracker; the caller's verify()
+            # raises that same object INSIDE the host transition boundary.
+            return HookResult(action="continue")
         return HookResult(action="continue")
 
     def _get_or_create_overlay(self) -> Any:

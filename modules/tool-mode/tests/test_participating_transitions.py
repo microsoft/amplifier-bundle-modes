@@ -5,6 +5,8 @@ Foundation is supplied by the test host, not a new modes runtime dependency.
 """
 
 import asyncio
+import logging
+import sys
 from contextlib import contextmanager
 from copy import deepcopy
 from importlib.metadata import version
@@ -415,3 +417,181 @@ async def test_external_contributor_exception_is_issuer_failure(runtime):
     assert not result.success
     assert not runtime.bridge.validate_receipt(old)
     assert not runtime.bridge.validate_receipt(runtime.bridge.graph_receipt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["activate", "change", "clear"])
+@pytest.mark.parametrize("failure", ["exception", "cancel", "false"])
+@pytest.mark.parametrize("notification", ["normal", "exception", "cancel"])
+async def test_participating_failure_diagnostics_are_safe_at_entry(
+    runtime, monkeypatch, phase, failure, notification
+):
+    """Observe BEFORE logger formatting/filtering and BEFORE native event emit.
+
+    Only new participating Modes diagnostics are qualified, not arbitrary
+    contributor/Foundation diagnostics or universal payload sanitization.
+    """
+    if phase != "activate":
+        assert (await change(runtime)).success
+    secret = "PRIVATE-MODE-IMAGE-data:image/png;base64,c2VjcmV0-https://private/?token=secret"
+    original_error = (
+        asyncio.CancelledError(secret) if failure == "cancel" else RuntimeError(secret)
+    )
+    original_error.__cause__ = ValueError(secret + "-cause")
+    original_error.add_note(secret + "-note")
+    overlay = runtime.hooks._get_or_create_overlay()
+    method = "revoke" if phase == "clear" else "apply"
+    setattr(
+        overlay, method,
+        AsyncMock(return_value=SimpleNamespace(success=False, error=secret))
+        if failure == "false" else AsyncMock(side_effect=original_error),
+    )
+    events, logs, tracked, observed_errors = [], [], [], []
+    original_tracker = runtime.hooks.track_transition
+
+    @contextmanager
+    def tracker(*args, **kwargs):
+        with original_tracker(*args, **kwargs) as operation:
+            tracked.append(operation)
+            yield operation
+
+    monkeypatch.setattr(runtime.hooks, "track_transition", tracker)
+    hooks_type = type(runtime.tool.coordinator.hooks)
+    original_emit = hooks_type.emit
+
+    async def emit(self, event, data):
+        events.append((event, deepcopy(data)))
+        if event == "mode:activation_failed":
+            if notification == "exception":
+                raise RuntimeError(secret + "-notification")
+            if notification == "cancel":
+                raise asyncio.CancelledError(secret + "-notification")
+        return await original_emit(self, event, data)
+
+    monkeypatch.setattr(hooks_type, "emit", emit)
+
+    def log_entry(self, level, msg, args, **kwargs):
+        # At logging's raw entry, before getMessage(), filters or formatters.
+        info = kwargs.get("exc_info")
+        if info is True:
+            info = sys.exc_info()
+        logs.append((self.name, level, msg, args, {**kwargs, "exc_info": info}))
+
+    monkeypatch.setattr(logging.Logger, "_log", log_entry)
+    original_factory = runtime.session.coordinator.get_capability(GRAPH_TRANSITION_CAPABILITY)
+
+    @contextmanager
+    def transition():
+        try:
+            with original_factory():
+                yield
+        except BaseException as exc:
+            observed_errors.append(exc)
+            raise
+
+    runtime.session.coordinator.register_capability(GRAPH_TRANSITION_CAPABILITY, transition)
+    operation, target = ("clear", None) if phase == "clear" else ("set", "beta")
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await change(runtime, operation, target)
+        assert raised.value is original_error
+    else:
+        assert not (await change(runtime, operation, target)).success
+    assert secret not in repr(events)
+    assert secret not in repr(logs)
+    assert all(not entry[-1].get("exc_info") and not entry[-1].get("stack_info") for entry in logs)
+    assert len(tracked) == 1 and tracked[0].error is observed_errors[0]
+    if failure != "false":
+        assert tracked[0].error is original_error
+    assert runtime.session.coordinator.session_state["mode_transition_failure"]
+    assert not runtime.bridge.validate_receipt(runtime.bridge.graph_receipt)
+
+
+@pytest.mark.asyncio
+async def test_tracked_failure_never_formats_exception_or_reads_result_error(runtime, monkeypatch):
+    class PrivateError(Exception):
+        def __str__(self):
+            pytest.fail("participating diagnostics called exception.__str__")
+
+        def __repr__(self):
+            pytest.fail("participating diagnostics called exception.__repr__")
+
+    class Refused:
+        success = False
+
+        @property
+        def error(self):
+            pytest.fail("participating diagnostics inspected opaque result.error")
+
+    overlay = runtime.hooks._get_or_create_overlay()
+    original = PrivateError()
+    overlay.apply = AsyncMock(side_effect=original)
+    payload = {"name": "alpha"}
+    with runtime.hooks.track_transition("mode:activated", payload=payload) as operation:
+        hook_result = await runtime.hooks.handle_mode_activated(
+            "mode:activated", {**payload, "transition_id": operation.id}
+        )
+        assert hook_result.action == "continue"  # never hand original to Core's logger
+        with pytest.raises(PrivateError) as raised:
+            operation.verify()
+        assert raised.value is original
+    overlay.apply = AsyncMock(return_value=Refused())
+    with runtime.hooks.track_transition("mode:activated", payload=payload) as operation:
+        await runtime.hooks.handle_mode_activated(
+            "mode:activated", {**payload, "transition_id": operation.id}
+        )
+        with pytest.raises(RuntimeError, match="Mode contribution apply failed"):
+            operation.verify()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["set", "clear"])
+@pytest.mark.parametrize("boundary", ["enter", "exit"])
+async def test_host_failure_diagnostic_is_bounded_before_formatting(
+    runtime, monkeypatch, operation, boundary
+):
+    if operation == "clear":
+        assert (await change(runtime)).success
+    secret = "PRIVATE-HOST-EXCEPTION-https://secret-image/?token=private"
+    entries = []
+    primary = RuntimeError(secret)
+    primary.add_note(secret)
+
+    @contextmanager
+    def factory():
+        if boundary == "enter":
+            raise primary
+        with runtime.graph.transition() as successor:
+            runtime.graph = successor
+            yield
+            raise primary
+
+    runtime.session.coordinator.register_capability(GRAPH_TRANSITION_CAPABILITY, factory)
+
+    def entry(self, level, msg, args, **kwargs):
+        entries.append((msg, args, kwargs))
+
+    monkeypatch.setattr(logging.Logger, "_log", entry)
+    assert not (await change(runtime, operation)).success
+    assert secret not in repr(entries)
+    assert all(not item[-1].get("exc_info") and not item[-1].get("stack_info") for item in entries)
+
+
+@pytest.mark.asyncio
+async def test_native_no_capability_preserves_existing_error_logging(runtime, monkeypatch):
+    coord = runtime.session.coordinator
+    coord.register_capability(GRAPH_TRANSITION_CAPABILITY, None)
+    entries = []
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("controlled native-only diagnostic")
+
+    # No participating graph qualification is requested in this compatibility
+    # probe. Existing native exception logging is intentionally not broadened.
+    monkeypatch.setattr(runtime.tool, "_activate_mode", broken)
+    monkeypatch.setattr(
+        "amplifier_module_tool_mode.logger.error",
+        lambda *args, **kwargs: entries.append((args, kwargs)),
+    )
+    assert not (await change(runtime)).success
+    assert entries == [(("_handle_set failed unexpectedly",), {"exc_info": True})]
