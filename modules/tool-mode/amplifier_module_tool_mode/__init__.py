@@ -162,11 +162,19 @@ class ModeTool:
         """
         all_modes = discovery.list_modes()
         active = self.coordinator.session_state.get("active_mode")
+        failure = self.coordinator.session_state.get("mode_transition_failure")
         # LLM-facing policy: only surface advertised modes
         return ToolResult(
-            success=True,
+            success=not bool(failure),
+            error=(
+                {
+                    "code": "transition_incomplete",
+                    "message": "A failed participating mode transition requires host recovery.",
+                } if failure else None
+            ),
             output={
-                "active_mode": active,
+                "active_mode": None if failure else active,
+                **({"transition_failure": failure} if failure else {}),
                 "modes": [
                     {"name": entry.name, "description": entry.description, "source": entry.source}
                     for entry in all_modes
@@ -393,6 +401,7 @@ class ModeTool:
                 raise body_error
             if not entered:
                 raise RuntimeError("Host transition did not enter")
+            logger.info("Participating mode transition completed: %s -> %s", previous, name)
             return result
         except BaseException as exc:
             if entered:
@@ -416,7 +425,7 @@ class ModeTool:
         # Only a serializable operation ID crosses the event bridge. The
         # modes-owned tracker retains the outcome even if Core swallows a hook
         # exception or copies/serializes the event payload.
-        with self._get_hooks().track_transition(event) as transition:
+        with self._get_hooks().track_transition(event, payload=payload) as transition:
             await self.coordinator.hooks.emit(
                 event, {**payload, "transition_id": transition.id}
             )
@@ -480,7 +489,8 @@ class ModeTool:
         if hooks:
             hooks.reset_warnings()
 
-        logger.info("Mode activated: %s (gate_policy=%s)", name, self.gate_policy)
+        if not participating:
+            logger.info("Mode activated: %s (gate_policy=%s)", name, self.gate_policy)
 
         # Build restricted tools summary
         restricted: dict[str, list[str]] = {}
@@ -626,7 +636,8 @@ class ModeTool:
         if hooks:
             hooks.reset_warnings()
         self._warned_transitions.clear()
-        logger.info("Mode cleared (was: %s)", previous)
+        if not participating:
+            logger.info("Mode cleared (was: %s)", previous)
         return ToolResult(
             success=True,
             output={

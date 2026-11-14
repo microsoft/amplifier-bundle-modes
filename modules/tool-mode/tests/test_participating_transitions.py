@@ -248,6 +248,8 @@ async def test_internal_contributor_failure_crosses_host_boundary(runtime, phase
     assert state["mode_runtime_overlay"] is overlay  # retained failure evidence
     assert not (await change(runtime)).success  # no automatic recovery/replay
     assert not (await change(runtime, "current")).success
+    listing = await change(runtime, "list")
+    assert not listing.success and listing.output["active_mode"] is None
     moderation = await runtime.hooks.handle_tool_pre("tool:pre", {"tool_name": "bash"})
     assert moderation.action == "deny"
     reminder = await runtime.hooks.handle_provider_request("provider:request", {})
@@ -262,6 +264,96 @@ async def test_missing_callback_never_qualifies_and_trackers_do_not_leak(runtime
         runtime.graph = successor
         successor.participant("hooks-mode").hooks.unregister("mode-overlay-change")
     assert not (await change(runtime, name="beta")).success
+    assert not runtime.bridge.validate_receipt(runtime.bridge.graph_receipt)
+
+
+@pytest.mark.asyncio
+async def test_change_revoke_failure_does_not_apply_target(runtime):
+    assert (await change(runtime)).success
+    overlay = runtime.hooks._get_or_create_overlay()
+    overlay.revoke = AsyncMock(return_value=SimpleNamespace(success=False, error="refusal"))
+    overlay.apply = AsyncMock()
+    assert not (await change(runtime, name="beta")).success
+    overlay.apply.assert_not_called()
+    assert not runtime.bridge.validate_receipt(runtime.bridge.graph_receipt)
+
+
+@pytest.mark.asyncio
+async def test_missing_tracker_refuses_before_host_entry(runtime):
+    runtime.hooks.track_transition = None
+    assert not (await change(runtime)).success
+    assert runtime.entries == 0 and runtime.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["duplicate", "mismatch", "stale"])
+async def test_operation_tracker_rejects_nonmatching_completion(runtime, kind):
+    hooks = runtime.hooks
+    event = "mode:activated"
+    payload = {"name": "alpha"}
+    with hooks.track_transition(event) as operation:
+        payload["transition_id"] = operation.id
+        if kind == "duplicate":
+            await hooks.handle_mode_activated(event, payload)
+            with pytest.raises(RuntimeError, match="duplicate"):
+                await hooks.handle_mode_activated(event, payload)
+            with pytest.raises(RuntimeError, match="duplicate"):
+                operation.verify()
+        elif kind == "mismatch":
+            with pytest.raises(RuntimeError, match="Mismatched"):
+                await hooks.handle_mode_changed("mode:changed", payload)
+            with pytest.raises(RuntimeError, match="Mismatched"):
+                operation.verify()
+    if kind == "stale":
+        with pytest.raises(RuntimeError, match="expired"):
+            await hooks.handle_mode_activated(event, payload)
+        with hooks.track_transition(event) as next_operation:
+            assert next_operation.id != operation.id
+            with pytest.raises(RuntimeError, match="did not complete"):
+                next_operation.verify()
+
+
+@pytest.mark.asyncio
+async def test_failure_latch_survives_capability_removal(runtime):
+    runtime.exit_error = RuntimeError("controlled failure")
+    assert not (await change(runtime)).success
+    calls = len(runtime.calls)
+    runtime.session.coordinator.register_capability(GRAPH_TRANSITION_CAPABILITY, None)
+    assert not (await change(runtime, name="beta")).success
+    assert len(runtime.calls) == calls  # never downgrade to unguarded native retry
+
+
+@pytest.mark.asyncio
+async def test_completion_is_bound_to_original_mode_target(runtime):
+    with runtime.hooks.track_transition(
+        "mode:activated", payload={"name": "alpha"}
+    ) as operation:
+        with pytest.raises(RuntimeError, match="target does not match"):
+            await runtime.hooks.handle_mode_activated(
+                "mode:activated", {"name": "beta", "transition_id": operation.id}
+            )
+        with pytest.raises(RuntimeError, match="target does not match"):
+            operation.verify()
+    assert runtime.session.coordinator.get_capability(RUNTIME_CONTEXT_OVERLAY_CAPABILITY) is None
+
+
+@pytest.mark.asyncio
+async def test_primary_cancel_survives_host_exit_error(runtime):
+    overlay = runtime.hooks._get_or_create_overlay()
+    overlay.apply = AsyncMock(side_effect=asyncio.CancelledError())
+
+    @contextmanager
+    def broken_exit():
+        try:
+            with runtime.graph.transition() as successor:
+                runtime.graph = successor
+                yield
+        finally:
+            raise RuntimeError("secondary cleanup error")
+
+    runtime.session.coordinator.register_capability(GRAPH_TRANSITION_CAPABILITY, broken_exit)
+    with pytest.raises(asyncio.CancelledError):
+        await change(runtime)
     assert not runtime.bridge.validate_receipt(runtime.bridge.graph_receipt)
     assert runtime.hooks._transitions == {}
 

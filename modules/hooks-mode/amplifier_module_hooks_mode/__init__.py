@@ -547,6 +547,7 @@ class ModeTransition:
     started: bool = False
     completed: bool = False
     error: BaseException | None = None
+    identity: dict[str, Any] | None = None
 
     def verify(self) -> None:
         """Fail inside the host boundary even when Core swallowed a callback."""
@@ -888,24 +889,36 @@ class ModeHooks:
             return HookResult(action="deny")
 
     @contextmanager
-    def track_transition(self, event: str):
+    def track_transition(self, event: str, *, payload: dict | None = None):
         """Track a single actual lifecycle dispatch across Core's event bridge.
 
         Hosts/tools add ``transition_id=transition.id`` to the ordinary event
         payload, await its emit and call ``transition.verify()`` BEFORE leaving
         their host-owned transition. Only a string crosses the event bridge;
         callbacks acknowledge this operation in this ModeHooks instance.
+        Pass the original ``payload`` to bind the acknowledgement to its exact
+        mode-name fields, not a rewritten target carrying the same ID.
         Absence of a callback, duplicate dispatch and stale IDs fail closed.
         This API neither opens nor qualifies a host graph transition.
         """
         if event not in {"mode:activated", "mode:changed", "mode:cleared"}:
             raise ValueError("Not a mode lifecycle event")
         transition = ModeTransition(event)
+        if payload is not None:
+            transition.identity = self._transition_identity(payload)
         self._transitions[transition.id] = transition
         try:
             yield transition
         finally:
             self._transitions.pop(transition.id, None)
+
+    @staticmethod
+    def _transition_identity(data: dict) -> dict:
+        return {
+            key: data[key] for key in (
+                "name", "mode", "old", "new", "from_mode", "to_mode", "previous_mode"
+            ) if key in data
+        }
 
     async def _handle_tracked_transition(self, event: str, data: dict) -> "HookResult":
         """Strict contribution path; native untracked lifecycle stays unchanged."""
@@ -917,6 +930,12 @@ class ModeHooks:
             raise RuntimeError("Unknown or expired mode transition")
         if transition.event != event or transition.started:
             transition.error = RuntimeError("Mismatched or duplicate mode callback")
+            raise transition.error
+        if (
+            transition.identity is not None
+            and transition.identity != self._transition_identity(data)
+        ):
+            transition.error = RuntimeError("Mode callback target does not match its operation")
             raise transition.error
         transition.started = True
         changing = event == "mode:changed"
